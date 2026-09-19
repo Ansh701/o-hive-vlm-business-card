@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 .venv/
+artifacts/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -27,4 +28,3 @@ terraform.tfstate*
 .terraform/
 model-cache/
 tmp/
-
