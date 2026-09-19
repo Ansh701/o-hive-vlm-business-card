@@ -5,6 +5,7 @@ import base64
 import binascii
 import os
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from io import BytesIO
 from typing import Any
@@ -16,7 +17,21 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from inference.security import SignatureError, verify_signature
 
 MODEL_ID = os.getenv("QWEN_MODEL", "Qwen/Qwen3-VL-2B-Instruct")
-SHARED_SECRET = os.getenv("INFERENCE_SHARED_SECRET", "")
+MODEL_DTYPE = os.getenv("MODEL_DTYPE", "float16")
+
+
+def _shared_secret() -> str:
+    secret_file = os.getenv("INFERENCE_SHARED_SECRET_FILE")
+    if secret_file:
+        try:
+            with open(secret_file, encoding="utf-8") as handle:
+                return handle.read().strip()
+        except OSError:
+            return ""
+    return os.getenv("INFERENCE_SHARED_SECRET", "")
+
+
+SHARED_SECRET = _shared_secret()
 MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(8 * 1024 * 1024)))
 PRELOAD_MODEL = os.getenv("PRELOAD_MODEL", "true").lower() == "true"
 ALLOWED_MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -59,10 +74,16 @@ class QwenRuntime:
 
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is required for the configured AWS inference service")
+        try:
+            model_dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16}[
+                MODEL_DTYPE
+            ]
+        except KeyError as exc:
+            raise RuntimeError("MODEL_DTYPE must be float16 or bfloat16") from exc
         self.processor = AutoProcessor.from_pretrained(MODEL_ID)
         self.model = Qwen3VLForConditionalGeneration.from_pretrained(
             MODEL_ID,
-            dtype=torch.bfloat16,
+            dtype=model_dtype,
             device_map="cuda",
             low_cpu_mem_usage=True,
         )
@@ -104,14 +125,14 @@ class QwenRuntime:
             trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )[0]
         image.close()
-        return result
+        return str(result)
 
 
 runtime = QwenRuntime()
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     if PRELOAD_MODEL:
         await runtime.load()
     yield

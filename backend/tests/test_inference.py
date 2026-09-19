@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 from collections.abc import Callable
+from pathlib import Path
 
 import httpx
 import pytest
@@ -19,6 +20,7 @@ from backend.app.inference import (
     InferenceTimeoutError,
     create_signature,
 )
+from inference import app as inference_app
 from inference.security import SignatureError, verify_signature
 
 VALID_LEAD = {
@@ -206,3 +208,14 @@ def test_invalid_or_stale_signature_is_rejected() -> None:
         verify_signature("shared", "1760000000", valid, body, now=1760000400)
     with pytest.raises(SignatureError, match="invalid"):
         verify_signature("shared", "1760000000", "sha256=bad", body, now=1760000001)
+
+
+def test_inference_secret_can_be_loaded_from_read_only_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret_file = tmp_path / "inference-secret"
+    secret_file.write_text("from-mounted-secret\n", encoding="utf-8")
+    monkeypatch.setenv("INFERENCE_SHARED_SECRET_FILE", str(secret_file))
+    monkeypatch.setenv("INFERENCE_SHARED_SECRET", "ignored-environment-value")
+
+    assert inference_app._shared_secret() == "from-mounted-secret"

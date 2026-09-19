@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: o_hive
+      POSTGRES_USER: o_hive
+      POSTGRES_PASSWORD: local-development-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U o_hive -d o_hive"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql+asyncpg://o_hive:local-development-only@postgres:5432/o_hive
+      ALLOWED_HOSTS: '["localhost", "127.0.0.1"]'
+      CORS_ORIGINS: '[]'
+      AWS_INFERENCE_ENDPOINT: ${AWS_INFERENCE_ENDPOINT:-}
+      AWS_INFERENCE_SHARED_SECRET: ${AWS_INFERENCE_SHARED_SECRET:-}
+      MAX_DAILY_CARDS: 50
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:

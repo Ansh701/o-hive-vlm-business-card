@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from pathlib import Path
+from time import perf_counter
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -11,12 +13,14 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from starlette.responses import Response
+from starlette.responses import FileResponse, Response
+from starlette.staticfiles import StaticFiles
 
 from backend.app.api import build_api_router
 from backend.app.config import Settings, get_settings
 from backend.app.db import SessionFactory
 from backend.app.inference import InferenceClient
+from backend.app.logging import configure_logging, get_logger
 from backend.app.rate_limit import SlidingWindowLimiter
 from backend.app.services import Extractor, ServiceError
 
@@ -31,6 +35,9 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
 }
+
+configure_logging()
+logger = get_logger(__name__)
 
 
 def create_app(
@@ -71,10 +78,31 @@ def create_app(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         request_id = str(uuid4())
-        response = await call_next(request)
+        request.state.request_id = request_id
+        started = perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            logger.exception(
+                "request_completed",
+                request_id=request_id,
+                method=request.method,
+                path=request.url.path,
+                status_code=500,
+                duration_ms=round((perf_counter() - started) * 1000, 1),
+            )
+            raise
         for name, value in SECURITY_HEADERS.items():
             response.headers[name] = value
         response.headers["X-Request-ID"] = request_id
+        logger.info(
+            "request_completed",
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            duration_ms=round((perf_counter() - started) * 1000, 1),
+        )
         return response
 
     @app.exception_handler(ServiceError)
@@ -117,8 +145,32 @@ def create_app(
             limiter=limiter,
         )
     )
+
+    frontend_root = runtime_settings.frontend_dist.resolve()
+    frontend_index = frontend_root / "index.html"
+    frontend_assets = frontend_root / "assets"
+    if frontend_index.is_file():
+        if frontend_assets.is_dir():
+            app.mount(
+                "/assets",
+                StaticFiles(directory=frontend_assets),
+                name="frontend-assets",
+            )
+
+        @app.get("/{frontend_path:path}", include_in_schema=False)
+        def serve_frontend(frontend_path: str) -> FileResponse:
+            if frontend_path == "api" or frontend_path.startswith("api/"):
+                raise HTTPException(status_code=404)
+            candidate: Path = (frontend_root / frontend_path).resolve()
+            if (
+                frontend_path
+                and candidate.is_relative_to(frontend_root)
+                and candidate.is_file()
+            ):
+                return FileResponse(candidate)
+            return FileResponse(frontend_index)
+
     return app
 
 
 app = create_app()
-

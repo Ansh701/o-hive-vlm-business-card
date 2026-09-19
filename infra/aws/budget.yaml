@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Account-level AWS cost guardrail for the O-HIVE demo — monitoring-only actual and
+  forecast email alerts avoid automated shutdown surprises
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@2
+  com.aws.cloudformation.Context:
+    arch: one monitoring-only monthly account budget; separate thresholds share one email
+    must:
+      - deploy in us-east-1 because AWS Budgets is a global billing API
+      - alerts are delayed and do not replace stopping the GPU after the review window
+    ref:
+      - at: README.md
+        has: cost estimates and manual stop/delete procedure
+        scope: repository
+
+Parameters:
+  AlertEmail:
+    Type: String
+    AllowedPattern: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+    Description: Address that confirms and receives AWS Budget notifications.
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 25
+    MinValue: 1
+    MaxValue: 1000
+    Description: Whole-account monthly budget in USD; choose with awareness of other workloads.
+
+Resources:
+  DemoCostBudget:
+    Type: AWS::Budgets::Budget
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: account-wide monitoring catches GPU, disk, public IPv4, and accidental unrelated spend
+        must:
+          - monitoring only; no automated action can terminate a live evaluator session
+          - keep actual 50/80/100 and forecast 100 percent alerts
+        mutable: change-with-constraints
+    Properties:
+      Budget:
+        BudgetName: !Sub ${AWS::StackName}-monthly-cost
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+        BudgetType: COST
+        TimeUnit: MONTHLY
+      NotificationsWithSubscribers:
+        - Notification:
+            ComparisonOperator: GREATER_THAN
+            NotificationType: ACTUAL
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - Address: !Ref AlertEmail
+              SubscriptionType: EMAIL
+        - Notification:
+            ComparisonOperator: GREATER_THAN
+            NotificationType: ACTUAL
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - Address: !Ref AlertEmail
+              SubscriptionType: EMAIL
+        - Notification:
+            ComparisonOperator: GREATER_THAN
+            NotificationType: ACTUAL
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - Address: !Ref AlertEmail
+              SubscriptionType: EMAIL
+        - Notification:
+            ComparisonOperator: GREATER_THAN
+            NotificationType: FORECASTED
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - Address: !Ref AlertEmail
+              SubscriptionType: EMAIL
+
+Outputs:
+  BudgetName:
+    Description: Monitoring budget name shown in AWS Billing and Cost Management.
+    Value: !Sub ${AWS::StackName}-monthly-cost

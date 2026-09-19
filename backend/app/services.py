@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
+from time import perf_counter
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.config import Settings
 from backend.app.inference import BusinessCardLead, InferenceError
+from backend.app.logging import get_logger
 from backend.app.models import Batch, BatchStatus, Lead, LeadStatus
 from backend.app.normalization import normalize_email, normalize_phone, normalize_text
 from backend.app.uploads import (
@@ -17,6 +19,8 @@ from backend.app.uploads import (
     display_filename,
     validate_image,
 )
+
+logger = get_logger(__name__)
 
 
 class Extractor(Protocol):
@@ -63,7 +67,7 @@ async def _enforce_batch_capacity(
     lead_count = await session.scalar(
         select(func.count(Lead.id)).where(Lead.batch_id == batch.id)
     )
-    if int(lead_count or 0) >= batch.total_cards:
+    if batch.processed_cards >= batch.total_cards or int(lead_count or 0) >= batch.total_cards:
         raise ServiceError(
             409,
             "batch_full",
@@ -80,6 +84,15 @@ async def _enforce_batch_capacity(
             "batch_too_large",
             "This card would exceed the batch upload-size limit. Remove another card or resize it.",
         )
+
+
+async def _reject_duplicate(session: AsyncSession, batch: Batch) -> None:
+    """Count a selected duplicate as an isolated failed card without storing it."""
+    batch.record_result(LeadStatus.FAILED)
+    await session.commit()
+    raise ServiceError(
+        409, "duplicate_card", "This image is already present in the current batch."
+    )
 
 
 async def _enforce_daily_cap(session: AsyncSession, settings: Settings) -> None:
@@ -106,9 +119,7 @@ async def _record_invalid_upload(
 ) -> None:
     digest = hashlib.sha256(content).hexdigest()
     if await _duplicate_exists(session, batch.id, digest):
-        raise ServiceError(
-            409, "duplicate_card", "This image is already present in the current batch."
-        )
+        await _reject_duplicate(session, batch)
     lead = Lead(
         batch_id=batch.id,
         source_filename=display_filename(filename),
@@ -163,9 +174,7 @@ async def process_card(
         raise ServiceError(422, exc.code, exc.detail) from exc
 
     if await _duplicate_exists(session, batch.id, image.sha256):
-        raise ServiceError(
-            409, "duplicate_card", "This image is already present in the current batch."
-        )
+        await _reject_duplicate(session, batch)
     await _enforce_daily_cap(session, settings)
 
     lead = Lead(
@@ -180,6 +189,7 @@ async def process_card(
     session.add(lead)
     await session.commit()
 
+    inference_started = perf_counter()
     try:
         result = await extractor.extract(image.content, image.media_type)
         fields, warnings = _normalized_fields(result)
@@ -197,6 +207,23 @@ async def process_card(
         lead.status = LeadStatus.FAILED
         lead.error_message = str(exc)
         lead.warnings = [str(exc)]
+        logger.warning(
+            "vlm_extraction_failed",
+            batch_id=str(batch_id),
+            lead_id=str(lead.id),
+            source_ref=image.sha256[:12],
+            duration_ms=round((perf_counter() - inference_started) * 1000, 1),
+            error_category=type(exc).__name__,
+        )
+    else:
+        logger.info(
+            "vlm_extraction_completed",
+            batch_id=str(batch_id),
+            lead_id=str(lead.id),
+            source_ref=image.sha256[:12],
+            duration_ms=round((perf_counter() - inference_started) * 1000, 1),
+            result=lead.status.value,
+        )
 
     batch = await get_batch_or_error(session, batch_id, for_update=True)
     batch.record_result(lead.status)

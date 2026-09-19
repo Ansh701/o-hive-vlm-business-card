@@ -1,0 +1,244 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Cost-bounded Qwen VLM inference host — uses one small GPU EC2 instance and an
+  outbound-only Cloudflare Tunnel instead of a load balancer, NAT gateway, or public ingress
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@2
+  com.aws.cloudformation.Context:
+    arch: Render -> HTTPS tunnel -> localhost-only Qwen container on EC2
+    must:
+      - Qwen executes on this AWS instance; no third-party model inference
+      - no inbound SG rules, NAT gateway, load balancer, Elastic IP, or SSH key
+      - both tunnel token & request HMAC secret come from SSM SecureString
+    ref:
+      - at: README.md
+        has: deployment steps, cost controls, shutdown procedure
+        scope: repository
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC containing an internet-routed public subnet; no NAT gateway is required.
+  PublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet with a route to an internet gateway for outbound tunnel traffic.
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Description: Current Ubuntu/NVIDIA Deep Learning AMI with Docker and NVIDIA Container Toolkit.
+  InstanceType:
+    Type: String
+    Default: g4dn.xlarge
+    AllowedValues: [g4dn.xlarge, g5.xlarge]
+    Description: g4dn.xlarge is the cost baseline; use g5.xlarge only when measured necessary.
+  CapacityMode:
+    Type: String
+    Default: Spot
+    AllowedValues: [Spot, OnDemand]
+    Description: Spot is cheaper but interruptions are acceptable only for the review demo.
+  InferenceImageUri:
+    Type: String
+    MinLength: 10
+    AllowedPattern: '^[A-Za-z0-9._:/@-]+$'
+    Description: Public immutable container image URI built from inference/Dockerfile.
+  CloudflaredImage:
+    Type: String
+    Default: cloudflare/cloudflared:latest
+    AllowedPattern: '^cloudflare/cloudflared(:[A-Za-z0-9._-]+|@sha256:[a-f0-9]{64})$'
+    Description: Pin to a reviewed digest for a long-lived deployment.
+  InferenceSecretParameterName:
+    Type: String
+    Default: /o-hive/inference/hmac-secret
+    AllowedPattern: '^/[A-Za-z0-9_.\-/]+$'
+    Description: Existing SSM SecureString containing the Render-to-model HMAC secret.
+  TunnelTokenParameterName:
+    Type: String
+    Default: /o-hive/inference/cloudflare-tunnel-token
+    AllowedPattern: '^/[A-Za-z0-9_.\-/]+$'
+    Description: Existing SSM SecureString containing one remotely managed tunnel token.
+  InferenceHostname:
+    Type: String
+    AllowedPattern: '^[A-Za-z0-9.-]+$'
+    Description: Hostname configured in Cloudflare Tunnel to proxy http://localhost:8001.
+  QwenModel:
+    Type: String
+    Default: Qwen/Qwen3-VL-2B-Instruct
+    AllowedPattern: '^Qwen/[A-Za-z0-9._-]+$'
+
+Conditions:
+  UseSpot: !Equals [!Ref CapacityMode, Spot]
+
+Resources:
+  InferenceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: egress-only origin; Cloudflare opens outbound HTTPS and no internet client reaches EC2 directly
+        must:
+          - never add inbound rules; request path is tunnel only
+          - outbound limited to TCP 443; cloudflared forced to HTTP/2
+        mutable: change-with-constraints
+    Properties:
+      GroupDescription: Outbound-only HTTPS for O-HIVE Qwen inference
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS model/image downloads, SSM, and Cloudflare HTTP2 tunnel
+      Tags:
+        - Key: Project
+          Value: O-HIVE-Card-Leads
+
+  InferenceRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: lets the instance use Session Manager and fetch only its two bootstrap secrets
+        must:
+          - no EC2 application credentials; browser & Render never receive AWS keys
+          - GetParameter scope stays on the two named SecureStrings
+        mutable: change-with-constraints
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: ReadInferenceBootstrapSecrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadOnlyNamedParameters
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${InferenceSecretParameterName}
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TunnelTokenParameterName}
+      Tags:
+        - Key: Project
+          Value: O-HIVE-Card-Leads
+
+  InferenceInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InferenceRole]
+
+  InferenceLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: captures hardened GPU boot config; Spot saves cost, OnDemand is review-window fallback
+        must:
+          - IMDSv2 required, encrypted 40GiB gp3, no SSH key
+          - model port bound to 127.0.0.1 only; tunnel is sole network path
+          - stop or delete stack outside review window
+        mutable: review-required
+        mutability:
+          LaunchTemplateData: change-with-constraints
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Name: !Ref InferenceInstanceProfile
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpTokens: required
+          HttpPutResponseHopLimit: 1
+          InstanceMetadataTags: disabled
+        InstanceMarketOptions: !If
+          - UseSpot
+          - MarketType: spot
+            SpotOptions:
+              InstanceInterruptionBehavior: terminate
+              SpotInstanceType: one-time
+          - !Ref AWS::NoValue
+        NetworkInterfaces:
+          - AssociatePublicIpAddress: true
+            DeleteOnTermination: true
+            DeviceIndex: 0
+            Groups: [!Ref InferenceSecurityGroup]
+            SubnetId: !Ref PublicSubnetId
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              DeleteOnTermination: true
+              Encrypted: true
+              VolumeSize: 40
+              VolumeType: gp3
+        Monitoring:
+          Enabled: false
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub ${AWS::StackName}-qwen
+              - Key: Project
+                Value: O-HIVE-Card-Leads
+              - Key: InferenceHostname
+                Value: !Ref InferenceHostname
+          - ResourceType: volume
+            Tags:
+              - Key: Project
+                Value: O-HIVE-Card-Leads
+        UserData:
+          Fn::Base64: !Sub |
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            umask 077
+            command -v aws >/dev/null
+            command -v docker >/dev/null
+            command -v nvidia-smi >/dev/null
+            systemctl enable --now docker
+            install -d -m 0711 /run/o-hive
+            install -d -m 0755 -o 10001 -g 10001 /opt/o-hive/model-cache
+            aws ssm get-parameter --name '${InferenceSecretParameterName}' --with-decryption --query Parameter.Value --output text > /run/o-hive/inference-secret
+            aws ssm get-parameter --name '${TunnelTokenParameterName}' --with-decryption --query Parameter.Value --output text > /run/o-hive/tunnel-token
+            chown 10001:10001 /run/o-hive/inference-secret
+            chown 65532:65532 /run/o-hive/tunnel-token
+            chmod 0400 /run/o-hive/inference-secret /run/o-hive/tunnel-token
+            docker pull '${InferenceImageUri}'
+            docker run --detach --name o-hive-inference --restart unless-stopped \
+              --gpus all --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+              --publish 127.0.0.1:8001:8001 \
+              --volume /opt/o-hive/model-cache:/opt/model-cache \
+              --volume /run/o-hive/inference-secret:/run/secrets/inference-secret:ro \
+              --env INFERENCE_SHARED_SECRET_FILE=/run/secrets/inference-secret \
+              --env QWEN_MODEL='${QwenModel}' \
+              --env MODEL_DTYPE=float16 \
+              '${InferenceImageUri}'
+            docker pull '${CloudflaredImage}'
+            docker run --detach --name o-hive-tunnel --restart unless-stopped \
+              --network host --read-only --tmpfs /tmp:rw,noexec,nosuid,size=32m \
+              --volume /run/o-hive/tunnel-token:/run/secrets/tunnel-token:ro \
+              --env TUNNEL_TOKEN_FILE=/run/secrets/tunnel-token \
+              '${CloudflaredImage}' tunnel --no-autoupdate --protocol http2 --loglevel warn run
+
+  InferenceInstance:
+    Type: AWS::EC2::Instance
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: one replaceable GPU worker created from the reviewed launch template
+        must:
+          - run no more than one demo worker to bound spend
+        mutable: review-required
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref InferenceLaunchTemplate
+        Version: !GetAtt InferenceLaunchTemplate.LatestVersionNumber
+
+Outputs:
+  InstanceId:
+    Description: Instance for Session Manager diagnostics; no SSH port is open.
+    Value: !Ref InferenceInstance
+  InferenceBaseUrl:
+    Description: Authenticated HTTPS tunnel origin configured in the Render service.
+    Value: !Sub https://${InferenceHostname}

@@ -150,10 +150,15 @@ async def test_duplicate_image_is_rejected_without_second_inference(
             f"/api/batches/{batch_id}/cards",
             files={"file": ("../../two.png", card, "image/png")},
         )
+        batch = await client.get(f"/api/batches/{batch_id}")
 
     assert first.status_code == 201
     assert duplicate.status_code == 409
     assert duplicate.json()["code"] == "duplicate_card"
+    assert batch.json()["status"] == "PARTIAL_SUCCESS"
+    assert batch.json()["processed_cards"] == 2
+    assert batch.json()["successful_cards"] == 1
+    assert batch.json()["failed_cards"] == 1
     assert inference.calls == 1
 
 

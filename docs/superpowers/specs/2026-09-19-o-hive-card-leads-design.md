@@ -12,7 +12,7 @@ The browser first creates a batch, then sends one multipart card request per ima
 
 The FastAPI process uses SQLAlchemy 2 async sessions and PostgreSQL in production. SQLite through `aiosqlite` is supported for deterministic local tests only. Alembic owns schema changes. A single multi-stage Dockerfile builds Vite and serves the generated assets from FastAPI.
 
-AWS runs `Qwen/Qwen3-VL-2B-Instruct` at BF16 on a single NVIDIA T4 `g4dn.xlarge`. This replaces the initial Qwen2.5-VL-3B candidate because the current 2B model is smaller, Apache-2.0 licensed, officially supported by vLLM/Transformers, and its model card reports improved OCR. CPU-only free-tier shapes are rejected: the smallest free shapes cannot hold the model, and larger credit-eligible CPU shapes do not provide acceptable interactive latency. SageMaker Serverless is rejected because it does not support GPUs. A Spot instance is the lowest-cost deployment when interruption risk is acceptable; on-demand is the reliable fallback. The instance must be stopped when the review window is closed.
+AWS runs `Qwen/Qwen3-VL-2B-Instruct` at FP16 on a single NVIDIA T4 `g4dn.xlarge`. FP16 is selected because T4 does not provide native BF16 acceleration; this is not 4-bit/8-bit quantization. This replaces the initial Qwen2.5-VL-3B candidate because the current 2B model is smaller, Apache-2.0 licensed, officially supported by Transformers, and its model card reports improved OCR. CPU-only free-tier shapes are rejected: the smallest free shapes cannot hold the model, and larger credit-eligible CPU shapes do not provide acceptable interactive latency. SageMaker Serverless is rejected because it does not support GPUs. A Spot instance is the lowest-cost deployment when interruption risk is acceptable; on-demand is the reliable fallback. The instance must be stopped when the review window is closed.
 
 ## Components and boundaries
 
@@ -47,4 +47,3 @@ Light is the first-visit default and the explicit preference is stored locally. 
 ## Verification
 
 Backend unit/integration tests cover image attacks, deduplication, output repair, timeouts/5xx, normalization, persistence, editing, export ordering/formula safety, limits, and health/readiness. Frontend tests cover the twelve specified workflows with mocked same-origin APIs. Synthetic images are generated from controlled fixtures. Quality gates are Ruff, mypy, pytest, ESLint, TypeScript, Vitest, Vite build, npm audit, Alembic from a clean database, container build when Docker is available, local runtime probes, real AWS inference, and deployed browser QA. Gates requiring unavailable credentials or tooling must be reported as blocked rather than inferred.
-

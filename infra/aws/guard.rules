@@ -1,0 +1,32 @@
+let launch_templates = Resources.*[ Type == 'AWS::EC2::LaunchTemplate' ]
+let security_groups = Resources.*[ Type == 'AWS::EC2::SecurityGroup' ]
+let nat_gateways = Resources.*[ Type == 'AWS::EC2::NatGateway' ]
+let load_balancers = Resources.*[
+  Type == 'AWS::ElasticLoadBalancingV2::LoadBalancer' or
+  Type == 'AWS::ElasticLoadBalancing::LoadBalancer'
+]
+let elastic_ips = Resources.*[ Type == 'AWS::EC2::EIP' ]
+let budgets = Resources.*[ Type == 'AWS::Budgets::Budget' ]
+
+rule gpu_host_uses_hardened_launch_template when %launch_templates !empty {
+  %launch_templates.Properties.LaunchTemplateData.MetadataOptions.HttpTokens == 'required'
+  %launch_templates.Properties.LaunchTemplateData.MetadataOptions.HttpEndpoint == 'enabled'
+  %launch_templates.Properties.LaunchTemplateData.BlockDeviceMappings.*.Ebs.Encrypted == true
+  %launch_templates.Properties.LaunchTemplateData.BlockDeviceMappings.*.Ebs.DeleteOnTermination == true
+  %launch_templates.Properties.LaunchTemplateData.BlockDeviceMappings.*.Ebs.VolumeSize <= 40
+}
+
+rule inference_origin_has_no_inbound_rules when %security_groups !empty {
+  %security_groups.Properties.SecurityGroupIngress empty
+}
+
+rule no_fixed_cost_networking {
+  %nat_gateways empty
+  %load_balancers empty
+  %elastic_ips empty
+}
+
+rule cost_budget_has_notifications when %budgets !empty {
+  %budgets.Properties.Budget.BudgetType == 'COST'
+  %budgets.Properties.NotificationsWithSubscribers !empty
+}

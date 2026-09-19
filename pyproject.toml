@@ -32,6 +32,7 @@ dev = [
   "pytest>=9,<10",
   "pytest-asyncio>=1.3,<2",
   "pytest-cov>=7,<8",
+  "pyyaml>=6.0,<7",
   "ruff>=0.14,<1",
 ]
 
@@ -59,5 +60,5 @@ plugins = ["pydantic.mypy"]
 exclude = ["backend/alembic/versions"]
 
 [[tool.mypy.overrides]]
-module = ["phonenumbers.*", "openpyxl.*"]
+module = ["phonenumbers.*", "openpyxl.*", "torch.*", "transformers.*"]
 ignore_missing_imports = true
