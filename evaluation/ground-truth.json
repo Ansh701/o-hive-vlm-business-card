@@ -1,0 +1,119 @@
+{
+  "clean-horizontal": {
+    "filename": "clean-horizontal.png",
+    "expected": {
+      "first_name": "Mina",
+      "last_name": "Patel",
+      "job_title": "Product Designer",
+      "company": "Northstar Studio",
+      "location": "Bengaluru, India",
+      "phone_number": "+91 98765 43210",
+      "email": "mina@northstar.example"
+    },
+    "synthetic": true
+  },
+  "vertical": {
+    "filename": "vertical.png",
+    "expected": {
+      "first_name": "Kenji",
+      "last_name": "Watanabe",
+      "job_title": "Principal Consultant",
+      "company": "Harbor Grid",
+      "location": "Tokyo, Japan",
+      "phone_number": "+81 3 5550 0123",
+      "email": "kenji@harborgrid.example"
+    },
+    "synthetic": true
+  },
+  "low-contrast": {
+    "filename": "low-contrast.png",
+    "expected": {
+      "first_name": "Imani",
+      "last_name": "Okafor",
+      "job_title": "Research Lead",
+      "company": "Pale Field Labs",
+      "location": "Lagos, Nigeria",
+      "phone_number": "+234 802 555 0194",
+      "email": "imani@palefield.example"
+    },
+    "synthetic": true
+  },
+  "with-logo": {
+    "filename": "with-logo.png",
+    "expected": {
+      "first_name": "Elias",
+      "last_name": "Berg",
+      "job_title": "Founder & CEO",
+      "company": "Fjordline Systems",
+      "location": "Oslo, Norway",
+      "phone_number": "+47 22 55 01 84",
+      "email": "elias@fjordline.example"
+    },
+    "synthetic": true
+  },
+  "phone-format": {
+    "filename": "phone-format.png",
+    "expected": {
+      "first_name": "Priya",
+      "last_name": "Nair",
+      "job_title": "Partnerships Manager",
+      "company": "Orbit Commons",
+      "location": "Kochi, India",
+      "phone_number": "(0484) 555 0138",
+      "email": "priya@orbitcommons.example"
+    },
+    "synthetic": true
+  },
+  "missing-email": {
+    "filename": "missing-email.png",
+    "expected": {
+      "first_name": "Thomas",
+      "last_name": "Reed",
+      "job_title": "Operations Director",
+      "company": "Cedar & Row",
+      "location": "Bristol, United Kingdom",
+      "phone_number": "+44 (0)117 555 0182",
+      "email": null
+    },
+    "synthetic": true
+  },
+  "missing-location": {
+    "filename": "missing-location.png",
+    "expected": {
+      "first_name": "Amina",
+      "last_name": "Diallo",
+      "job_title": "Account Executive",
+      "company": "Kora Works",
+      "location": null,
+      "phone_number": "+221 33 555 01 27",
+      "email": "amina@koraworks.example"
+    },
+    "synthetic": true
+  },
+  "complex-name": {
+    "filename": "complex-name.png",
+    "expected": {
+      "first_name": "María José",
+      "last_name": "Carreño Quiñones",
+      "job_title": "Global Programs Lead",
+      "company": "Lumen Sur",
+      "location": "Bogotá, Colombia",
+      "phone_number": "+57 601 555 0142",
+      "email": "maria.jose@lumensur.example"
+    },
+    "synthetic": true
+  },
+  "slightly-rotated": {
+    "filename": "slightly-rotated.png",
+    "expected": {
+      "first_name": "Luca",
+      "last_name": "Bianchi",
+      "job_title": "Creative Technologist",
+      "company": "Forma Uno",
+      "location": "Milano, Italy",
+      "phone_number": "+39 02 5550 0164",
+      "email": "luca@formauno.example"
+    },
+    "synthetic": true
+  }
+}
