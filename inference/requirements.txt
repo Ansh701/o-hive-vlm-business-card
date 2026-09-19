@@ -1,0 +1,8 @@
+accelerate>=1.12,<2
+fastapi>=0.128,<1
+pillow>=12.1,<13
+pydantic>=2.12,<3
+safetensors>=0.6,<1
+transformers>=4.57,<5
+uvicorn[standard]>=0.40,<1
+
