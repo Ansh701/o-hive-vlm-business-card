@@ -2,12 +2,13 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Request, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.app.config import Settings
-from backend.app.models import Batch, Lead
+from backend.app.export import build_workbook, export_filename
+from backend.app.models import Batch, Lead, LeadStatus
 from backend.app.rate_limit import SlidingWindowLimiter
 from backend.app.schemas import BatchCreate, BatchRead, LeadPatch, LeadRead
 from backend.app.services import (
@@ -96,6 +97,39 @@ def build_api_router(
             select(Lead).where(Lead.batch_id == batch_id).order_by(Lead.created_at, Lead.id)
         )
         return list(result)
+
+    @router.get("/batches/{batch_id}/export.xlsx")
+    async def export_leads(
+        batch_id: UUID,
+        session: Session,
+        lead_ids: Annotated[list[UUID] | None, Query()] = None,
+    ) -> Response:
+        await get_batch_or_error(session, batch_id)
+        statement = select(Lead).where(
+            Lead.batch_id == batch_id,
+            Lead.status.in_([LeadStatus.SUCCESS, LeadStatus.PARTIAL]),
+        )
+        if lead_ids is not None:
+            statement = statement.where(Lead.id.in_(lead_ids))
+        result = await session.scalars(statement.order_by(Lead.created_at, Lead.id))
+        leads = list(result)
+        if not leads:
+            raise ServiceError(
+                422,
+                "no_exportable_leads",
+                "Select at least one successfully extracted lead before exporting.",
+            )
+        payload = build_workbook(leads).getvalue()
+        return Response(
+            content=payload,
+            media_type=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+            headers={
+                "Content-Disposition": f'attachment; filename="{export_filename()}"',
+                "Cache-Control": "no-store",
+            },
+        )
 
     @router.patch("/leads/{lead_id}", response_model=LeadRead)
     async def patch_lead(lead_id: UUID, payload: LeadPatch, session: Session) -> Lead:
