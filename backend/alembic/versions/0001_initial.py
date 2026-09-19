@@ -36,6 +36,8 @@ def upgrade() -> None:
         sa.Column("batch_id", sa.Uuid(), nullable=False),
         sa.Column("source_filename", sa.String(length=255), nullable=False),
         sa.Column("content_sha256", sa.String(length=64), nullable=False),
+        sa.Column("source_size_bytes", sa.Integer(), nullable=False),
+        sa.Column("model_invoked", sa.Boolean(), nullable=False),
         sa.Column("first_name", sa.String(length=200), nullable=True),
         sa.Column("last_name", sa.String(length=200), nullable=True),
         sa.Column("job_title", sa.String(length=300), nullable=True),
@@ -60,4 +62,3 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table("leads")
     op.drop_table("batches")
-

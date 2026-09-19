@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from uuid import uuid4
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import Response
+
+from backend.app.api import build_api_router
+from backend.app.config import Settings, get_settings
+from backend.app.db import SessionFactory
+from backend.app.inference import InferenceClient
+from backend.app.rate_limit import SlidingWindowLimiter
+from backend.app.services import Extractor, ServiceError
+
+SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; "
+        "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; "
+        "form-action 'self'; frame-ancestors 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+def create_app(
+    *,
+    settings: Settings | None = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    inference_client: Extractor | None = None,
+) -> FastAPI:
+    runtime_settings = settings or get_settings()
+    sessions = session_factory or SessionFactory
+    extractor = inference_client or InferenceClient(runtime_settings)
+    limiter = SlidingWindowLimiter()
+
+    app = FastAPI(
+        title="O-HIVE Card Leads",
+        debug=False,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    app.state.settings = runtime_settings
+    app.state.session_factory = sessions
+    app.state.inference_client = extractor
+    app.state.rate_limiter = limiter
+
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=runtime_settings.allowed_hosts)
+    if runtime_settings.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=runtime_settings.cors_origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "PATCH", "DELETE"],
+            allow_headers=["Content-Type", "X-Request-ID"],
+        )
+
+    @app.middleware("http")
+    async def security_headers(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        request_id = str(uuid4())
+        response = await call_next(request)
+        for name, value in SECURITY_HEADERS.items():
+            response.headers[name] = value
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+    @app.exception_handler(ServiceError)
+    async def service_error_handler(_request: Request, exc: ServiceError) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail, "code": exc.code},
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(
+        _request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": exc.errors(), "code": "validation_error"},
+        )
+
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        return {"status": "alive"}
+
+    @app.get("/ready")
+    async def ready() -> JSONResponse:
+        try:
+            async with sessions() as session:
+                await session.execute(text("SELECT 1"))
+        except SQLAlchemyError:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "database": "unavailable"},
+            )
+        return JSONResponse(content={"status": "ready", "database": "ok"})
+
+    app.include_router(
+        build_api_router(
+            settings=runtime_settings,
+            session_factory=sessions,
+            inference_client=extractor,
+            limiter=limiter,
+        )
+    )
+    return app
+
+
+app = create_app()
+

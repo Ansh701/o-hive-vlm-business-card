@@ -5,7 +5,17 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -100,6 +110,8 @@ class Lead(Base):
     )
     source_filename: Mapped[str] = mapped_column(String(255))
     content_sha256: Mapped[str] = mapped_column(String(64))
+    source_size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    model_invoked: Mapped[bool] = mapped_column(Boolean, default=False)
     first_name: Mapped[str | None] = mapped_column(String(200), default=None)
     last_name: Mapped[str | None] = mapped_column(String(200), default=None)
     job_title: Mapped[str | None] = mapped_column(String(300), default=None)
@@ -127,6 +139,8 @@ class Lead(Base):
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("id", uuid4())
         kwargs.setdefault("status", LeadStatus.QUEUED)
+        kwargs.setdefault("source_size_bytes", 0)
+        kwargs.setdefault("model_invoked", False)
         kwargs.setdefault("warnings", [])
         kwargs.setdefault("created_at", utc_now())
         kwargs.setdefault("updated_at", utc_now())

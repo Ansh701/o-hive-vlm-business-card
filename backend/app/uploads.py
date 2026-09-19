@@ -33,7 +33,7 @@ class ValidatedImage:
     height: int
 
 
-def _display_filename(filename: str) -> str:
+def display_filename(filename: str) -> str:
     name = PurePosixPath(filename.replace("\\", "/")).name
     printable = "".join(character for character in name if character.isprintable())
     return (printable.strip() or "business-card")[:255]
@@ -49,8 +49,8 @@ def _raise_invalid_image() -> None:
 def validate_image(filename: str, content: bytes, settings: Settings) -> ValidatedImage:
     """Decode and re-encode an allowed image so metadata and trailing payloads are dropped."""
 
-    display_filename = _display_filename(filename)
-    suffix = PurePosixPath(display_filename.lower()).suffix
+    safe_display_name = display_filename(filename)
+    suffix = PurePosixPath(safe_display_name.lower()).suffix
     expected_format = ALLOWED_EXTENSIONS.get(suffix)
     if expected_format is None:
         raise UploadValidationError(
@@ -125,7 +125,7 @@ def validate_image(filename: str, content: bytes, settings: Settings) -> Validat
         sha256=hashlib.sha256(content).hexdigest(),
         media_type=MEDIA_TYPES[detected_format],
         safe_suffix=SAFE_SUFFIXES[detected_format],
-        display_filename=display_filename,
+        display_filename=safe_display_name,
         width=width,
         height=height,
     )

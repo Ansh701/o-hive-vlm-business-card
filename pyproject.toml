@@ -61,4 +61,3 @@ exclude = ["backend/alembic/versions"]
 [[tool.mypy.overrides]]
 module = ["phonenumbers.*", "openpyxl.*"]
 ignore_missing_imports = true
-
