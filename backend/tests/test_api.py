@@ -308,6 +308,74 @@ async def test_batch_creation_rate_limit_returns_clear_429(
 
 
 @pytest.mark.asyncio
+async def test_card_rate_limit_blocks_rapid_paid_requests(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    inference = StubInference(extracted(), extracted())
+    client, _app = await make_client(
+        session_factory, inference, card_requests_per_minute=1
+    )
+    async with client:
+        batch_id = (await client.post("/api/batches", json={"total_cards": 2})).json()["id"]
+        first = await client.post(
+            f"/api/batches/{batch_id}/cards",
+            files={"file": ("one.png", png_bytes("white"), "image/png")},
+        )
+        limited = await client.post(
+            f"/api/batches/{batch_id}/cards",
+            files={"file": ("two.png", png_bytes("black"), "image/png")},
+        )
+
+    assert first.status_code == 201
+    assert limited.status_code == 429
+    assert limited.json()["code"] == "rate_limited"
+    assert inference.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_declared_oversized_request_is_rejected_before_processing(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    inference = StubInference(extracted())
+    client, _app = await make_client(session_factory, inference, max_file_bytes=1024)
+    async with client:
+        batch_id = (await client.post("/api/batches", json={"total_cards": 1})).json()["id"]
+        rejected = await client.post(
+            f"/api/batches/{batch_id}/cards",
+            files={"file": ("one.png", png_bytes(), "image/png")},
+            headers={"Content-Length": str(2 * 1024 * 1024)},
+        )
+
+    assert rejected.status_code == 413
+    assert rejected.json()["code"] == "request_too_large"
+    assert inference.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_malformed_identifier_and_huge_edit_are_safe_validation_errors(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    client, _app = await make_client(session_factory, StubInference(extracted()))
+    async with client:
+        malformed = await client.get("/api/batches/not-a-uuid")
+        batch_id = (await client.post("/api/batches", json={"total_cards": 1})).json()["id"]
+        lead_id = (
+            await client.post(
+                f"/api/batches/{batch_id}/cards",
+                files={"file": ("one.png", png_bytes(), "image/png")},
+            )
+        ).json()["id"]
+        huge = await client.patch(
+            f"/api/leads/{lead_id}", json={"first_name": "x" * 201}
+        )
+
+    assert malformed.status_code == 422
+    assert malformed.json()["code"] == "validation_error"
+    assert huge.status_code == 422
+    assert huge.json()["code"] == "validation_error"
+
+
+@pytest.mark.asyncio
 async def test_daily_card_cap_stops_paid_inference(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

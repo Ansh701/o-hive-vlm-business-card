@@ -8,7 +8,7 @@ Success means the React application and FastAPI API share one Render origin; Pos
 
 ## Architecture
 
-The browser first creates a batch, then sends one multipart card request per image with concurrency limited to two. Each request validates real image bytes, dimensions, decompression safety, per-file and batch limits, and a SHA-256 duplicate key. The API writes the image to a UUID-named temporary file, calls the authenticated AWS inference endpoint, persists the structured result, and removes the file in a `finally` block. Completion of each HTTP request is genuine card-level progress; a failed request does not invalidate successful cards.
+The browser first creates a batch, then sends one multipart card request per image with concurrency limited to two. Each request validates real image bytes, dimensions, decompression safety, per-file and batch limits, and a SHA-256 duplicate key. The API re-encodes the card without metadata, holds those bytes in memory only while calling the authenticated AWS inference endpoint, then persists only the structured result. Starlette's upload handle is explicitly closed before inference. Completion of each HTTP request is genuine card-level progress; a failed request does not invalidate successful cards.
 
 The FastAPI process uses SQLAlchemy 2 async sessions and PostgreSQL in production. SQLite through `aiosqlite` is supported for deterministic local tests only. Alembic owns schema changes. A single multi-stage Dockerfile builds Vite and serves the generated assets from FastAPI.
 
@@ -36,7 +36,7 @@ Meaningful surfaces implement empty, loading, success, and error states. Duplica
 
 ## Security and privacy
 
-Production disables debug/OpenAPI UI, validates Host, keeps CORS same-origin except explicit local origins, and sends CSP, frame, content-type, referrer, and permissions headers. Public mutation endpoints receive per-IP in-memory throttling appropriate to a single-instance demo plus a database-backed daily card cap. Uploads accept JPEG/PNG/WEBP only after Pillow verifies decoded content, reject large files/pixels and duplicate hashes, ignore user filenames for filesystem paths, and delete temporary files after inference. Model and application services authenticate requests with a short-lived HMAC signature; secrets remain server-side. Logs carry IDs, durations, categories, and safe filenames but not raw images, full contact data, credentials, or model bodies.
+Production disables debug/OpenAPI UI, validates Host, keeps CORS same-origin except explicit local origins, and sends CSP, HSTS, frame, content-type, referrer, and permissions headers. Public mutation endpoints receive per-IP and global in-memory throttling appropriate to a single-instance demo plus a database-backed daily card cap. Uploads accept JPEG/PNG/WEBP only after Pillow verifies decoded content, reject large files/pixels and duplicate hashes, ignore user filenames for filesystem paths, explicitly close temporary multipart handles, and never write application-owned raw-image files. Model and application services authenticate requests with a short-lived HMAC signature; secrets remain server-side. JSON logs carry request/batch/lead IDs, durations, result categories, and truncated content hashes but not raw images, filenames, full contact data, credentials, or model bodies.
 
 Excel cells beginning with `=`, `+`, `-`, or `@` receive a leading apostrophe. Response headers force an `.xlsx` attachment. API writes use Pydantic allowlists with rejected extra fields and length bounds.
 

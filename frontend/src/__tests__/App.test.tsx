@@ -8,6 +8,8 @@ import type { Lead } from "../types";
 
 vi.mock("../api", () => ({
   createBatch: vi.fn(),
+  getBatch: vi.fn(),
+  getLeads: vi.fn(),
   uploadCard: vi.fn(),
   updateLead: vi.fn(),
   removeLead: vi.fn(),
@@ -55,6 +57,17 @@ beforeEach(() => {
     created_at: "2026-09-19T00:00:00Z",
     completed_at: null
   });
+  vi.mocked(api.getBatch).mockResolvedValue({
+    id: "batch-1",
+    status: "COMPLETED",
+    total_cards: 1,
+    processed_cards: 1,
+    successful_cards: 1,
+    failed_cards: 0,
+    created_at: "2026-09-19T00:00:00Z",
+    completed_at: "2026-09-19T00:01:00Z"
+  });
+  vi.mocked(api.getLeads).mockResolvedValue([successfulLead]);
   vi.mocked(api.uploadCard).mockImplementation((_id, _file, onProgress) => {
     onProgress(100);
     return Promise.resolve(successfulLead);
@@ -196,6 +209,17 @@ describe("business card workflow", () => {
     await userEvent.click(screen.getByRole("button", { name: "Download Excel" }));
     await waitFor(() => expect(api.downloadWorkbook).toHaveBeenCalledWith("batch-1", ["lead-1"]));
     expect(screen.getByText("Workbook download started.")).toBeVisible();
+  });
+
+  it("restores persisted structured leads after a refresh", async () => {
+    localStorage.setItem("o-hive-active-batch", "batch-1");
+
+    render(<App />);
+
+    expect(await screen.findByText("Ada Lovelace")).toBeVisible();
+    expect(api.getBatch).toHaveBeenCalledWith("batch-1");
+    expect(api.getLeads).toHaveBeenCalledWith("batch-1");
+    expect(screen.getByRole("button", { name: "Download Excel" })).toBeEnabled();
   });
 });
 

@@ -33,6 +33,7 @@ def _shared_secret() -> str:
 
 SHARED_SECRET = _shared_secret()
 MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(8 * 1024 * 1024)))
+MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", str(13 * 1024 * 1024)))
 PRELOAD_MODEL = os.getenv("PRELOAD_MODEL", "true").lower() == "true"
 ALLOWED_MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
@@ -161,12 +162,30 @@ async def ready() -> dict[str, str | bool]:
 
 @app.post("/v1/extract", response_model=ExtractionResponse)
 async def extract(request: Request) -> ExtractionResponse:
+    declared_size = request.headers.get("content-length")
+    if declared_size is not None:
+        try:
+            request_size = int(declared_size)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="invalid content length"
+            ) from exc
+        if request_size > MAX_REQUEST_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail="request too large",
+            )
     if not SHARED_SECRET:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="inference authentication is not configured",
         )
     body = await request.body()
+    if len(body) > MAX_REQUEST_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="request too large",
+        )
     try:
         verify_signature(
             SHARED_SECRET,
@@ -196,7 +215,7 @@ async def extract(request: Request) -> ExtractionResponse:
         ) from exc
     if not image_bytes or len(image_bytes) > MAX_IMAGE_BYTES:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="image too large"
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="image too large"
         )
     try:
         with Image.open(BytesIO(image_bytes)) as image:

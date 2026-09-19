@@ -29,7 +29,9 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - run: pip install -e '.[dev]'
+      - run: pip install -e '.[dev]' pip-audit
+      - run: pip-audit . --progress-spinner off
+      - run: pip-audit -r inference/requirements.txt --progress-spinner off
       - run: ruff check backend scripts inference
       - run: mypy backend/app scripts inference
       - run: pytest -q

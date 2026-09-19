@@ -63,6 +63,15 @@ def test_root_dockerfile_builds_frontend_then_runs_single_fastapi_service() -> N
     assert "USER app" in dockerfile
 
 
+def test_inference_image_uses_current_digest_pinned_gpu_runtime() -> None:
+    dockerfile = (ROOT / "inference/Dockerfile").read_text(encoding="utf-8")
+    requirements = (ROOT / "inference/requirements.txt").read_text(encoding="utf-8")
+
+    assert "pytorch/pytorch:2.14.0-cuda12.6-cudnn9-runtime@sha256:" in dockerfile
+    assert "torch==2.6.0" not in dockerfile
+    assert "transformers>=5.10,<6" in requirements
+
+
 def test_render_blueprint_has_exactly_one_web_service_and_one_postgres() -> None:
     blueprint = yaml.safe_load((ROOT / "render.yaml").read_text(encoding="utf-8"))
 
@@ -81,6 +90,7 @@ def test_aws_template_uses_small_gpu_hardening_and_no_fixed_cost_networking() ->
     assert "HttpTokens: required" in template
     assert "Encrypted: true" in template
     assert "VolumeSize: 40" in template
+    assert "MODEL_DTYPE=float16" in template
     assert "cloudflared" in template.lower()
     assert "SecurityGroupIngress" not in template
     for expensive_resource in (

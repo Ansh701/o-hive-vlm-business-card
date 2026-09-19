@@ -94,6 +94,10 @@ def create_app(
             raise
         for name, value in SECURITY_HEADERS.items():
             response.headers[name] = value
+        if runtime_settings.environment == "production":
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains"
+            )
         response.headers["X-Request-ID"] = request_id
         logger.info(
             "request_completed",

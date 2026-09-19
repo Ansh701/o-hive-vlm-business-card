@@ -30,6 +30,14 @@ def test_settings_default_to_safe_local_values() -> None:
     assert settings.environment == "development"
 
 
+def test_render_postgres_url_is_normalized_to_asyncpg() -> None:
+    settings = Settings(database_url="postgresql://user:password@database.example/o_hive")
+
+    assert settings.database_url == (
+        "postgresql+asyncpg://user:password@database.example/o_hive"
+    )
+
+
 def test_batch_and_lead_use_uuid_identifiers_and_nullable_fields() -> None:
     batch = Batch(total_cards=2)
     lead = Lead(
@@ -102,4 +110,3 @@ def test_model_ids_can_be_supplied_for_database_hydration() -> None:
 
     assert batch.id == batch_id
     assert lead.id == lead_id
-

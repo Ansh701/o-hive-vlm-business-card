@@ -28,13 +28,22 @@ import {
   useState
 } from "react";
 
-import { createBatch, downloadWorkbook, removeLead, updateLead, uploadCard } from "./api";
+import {
+  createBatch,
+  downloadWorkbook,
+  getBatch,
+  getLeads,
+  removeLead,
+  updateLead,
+  uploadCard
+} from "./api";
 import type { Lead, LeadFields, LeadPatch } from "./types";
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_CARDS = 20;
 const ACCEPTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp"]);
 const ACCEPTED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const ACTIVE_BATCH_KEY = "o-hive-active-batch";
 
 type Theme = "light" | "dark";
 type Phase = "upload" | "processing" | "review";
@@ -465,6 +474,8 @@ export default function App() {
   const [editing, setEditing] = useState<Lead | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(() => Boolean(localStorage.getItem(ACTIVE_BATCH_KEY)));
+  const [showRestoreStatus, setShowRestoreStatus] = useState(false);
   const previewUrls = useRef(new Set<string>());
 
   useEffect(() => {
@@ -476,6 +487,73 @@ export default function App() {
 
   useEffect(() => () => {
     for (const url of previewUrls.current) URL.revokeObjectURL(url);
+  }, []);
+
+  useEffect(() => {
+    if (!restoring) return;
+    const timer = window.setTimeout(() => setShowRestoreStatus(true), 250);
+    return () => window.clearTimeout(timer);
+  }, [restoring]);
+
+  useEffect(() => {
+    const storedBatchId = localStorage.getItem(ACTIVE_BATCH_KEY);
+    if (!storedBatchId) {
+      setRestoring(false);
+      return;
+    }
+    let cancelled = false;
+    void Promise.all([getBatch(storedBatchId), getLeads(storedBatchId)])
+      .then(([batch, persistedLeads]) => {
+        if (cancelled) return;
+        if (!persistedLeads.length) {
+          localStorage.removeItem(ACTIVE_BATCH_KEY);
+          return;
+        }
+        const recoveredCards: LocalCard[] = persistedLeads.map((lead) => {
+          const extracted = lead.status === "SUCCESS" || lead.status === "PARTIAL";
+          return {
+            id: `restored-${lead.id}`,
+            file: new File([], lead.source_filename),
+            previewUrl: null,
+            stage: extracted ? "done" : "failed",
+            progress: 100,
+            error: extracted
+              ? null
+              : lead.error_message ?? "Processing was interrupted. Upload this card again."
+          };
+        });
+        while (recoveredCards.length < batch.total_cards) {
+          recoveredCards.push({
+            id: `restored-missing-${recoveredCards.length}`,
+            file: new File([], "Skipped duplicate card"),
+            previewUrl: null,
+            stage: "failed",
+            progress: 100,
+            error: "This duplicate or interrupted card was not stored. Upload it again if needed."
+          });
+        }
+        setBatchId(batch.id);
+        setCards(recoveredCards);
+        setLeads(persistedLeads);
+        setSelected(new Set(
+          persistedLeads
+            .filter((lead) => lead.status === "SUCCESS" || lead.status === "PARTIAL")
+            .map((lead) => lead.id)
+        ));
+        setPhase("review");
+      })
+      .catch(() => {
+        if (!cancelled) {
+          localStorage.removeItem(ACTIVE_BATCH_KEY);
+          setGlobalError("Your previous batch is no longer available. Start a new batch below.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRestoring(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const addFiles = (files: File[]) => {
@@ -522,6 +600,7 @@ export default function App() {
     try {
       const batch = await createBatch(ready.length);
       setBatchId(batch.id);
+      localStorage.setItem(ACTIVE_BATCH_KEY, batch.id);
       setPhase("processing");
       setCards((current) => current.map((card) => card.stage === "ready" ? { ...card, stage: "queued" } : card));
       let cursor = 0;
@@ -562,7 +641,10 @@ export default function App() {
     }
   };
 
-  const exportable = useMemo(() => leads.filter((lead) => lead.status !== "FAILED"), [leads]);
+  const exportable = useMemo(
+    () => leads.filter((lead) => lead.status === "SUCCESS" || lead.status === "PARTIAL"),
+    [leads]
+  );
   const failedCount = cards.filter((card) => card.stage === "failed").length;
   const reviewCount = exportable.filter((lead) => lead.status === "PARTIAL").length;
   const completedCount = cards.filter((card) => card.stage === "done" || card.stage === "failed").length;
@@ -625,6 +707,7 @@ export default function App() {
     setLeads([]);
     setSelected(new Set());
     setBatchId(null);
+    localStorage.removeItem(ACTIVE_BATCH_KEY);
     setGlobalError(null);
     setExportMessage(null);
     setPhase("upload");
@@ -660,7 +743,14 @@ export default function App() {
           </div>
         )}
 
-        {phase === "upload" && (
+        {restoring && showRestoreStatus && (
+          <section className="restore-state" role="status" aria-live="polite">
+            <ScanLine size={20} aria-hidden="true" />
+            <div><strong>Restoring your last batch…</strong><span>Loading saved lead data.</span></div>
+          </section>
+        )}
+
+        {!restoring && phase === "upload" && (
           <div className="upload-layout">
             <UploadSurface dragging={dragging} onDrag={setDragging} onDrop={addFiles} onChoose={addFiles} />
             <aside className="intake-notes" aria-label="How extraction works">
@@ -672,16 +762,16 @@ export default function App() {
                 <li><Check size={15} /> One card per image</li>
                 <li><Check size={15} /> Structured data retained; raw image discarded</li>
               </ul>
-              <div className="privacy-note"><Info size={16} /><p><strong>Privacy note</strong>Images are held in memory only for validation and AWS extraction. The database stores the resulting lead, not the card image.</p></div>
+              <div className="privacy-note"><Info size={16} /><p><strong>Privacy note</strong>Images are used only for validation and AWS extraction. Temporary upload buffers are closed immediately; card images are never saved to the database or application storage.</p></div>
             </aside>
           </div>
         )}
 
-        {(phase === "upload" || phase === "processing") && (
+        {!restoring && (phase === "upload" || phase === "processing") && (
           <FileTray cards={cards} processing={phase === "processing"} onRemove={removeLocalCard} />
         )}
 
-        {phase === "upload" && cards.length > 0 && (
+        {!restoring && phase === "upload" && cards.length > 0 && (
           <div className="action-dock">
             <div>
               <strong>{validCount} card{validCount === 1 ? "" : "s"} ready</strong>
@@ -693,14 +783,14 @@ export default function App() {
           </div>
         )}
 
-        {phase === "processing" && (
+        {!restoring && phase === "processing" && (
           <>
             <ProcessingStatus cards={cards} />
             <p className="sr-status" aria-live="polite">{completedCount} of {cards.length} completed</p>
           </>
         )}
 
-        {phase === "review" && (
+        {!restoring && phase === "review" && (
           <>
             <section className="result-summary" aria-live="polite">
               <div className="summary-mark"><Check size={21} /></div>

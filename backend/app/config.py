@@ -44,9 +44,15 @@ class Settings(BaseSettings):
     batch_creations_per_minute: int = Field(default=10, ge=1, le=120)
     card_requests_per_minute: int = Field(default=30, ge=1, le=300)
 
-    @field_validator("database_url")
+    @field_validator("database_url", mode="before")
     @classmethod
-    def require_async_database_driver(cls, value: str) -> str:
+    def require_async_database_driver(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("DATABASE_URL must be a string")
+        if value.startswith("postgres://"):
+            value = "postgresql+asyncpg://" + value.removeprefix("postgres://")
+        elif value.startswith("postgresql://"):
+            value = "postgresql+asyncpg://" + value.removeprefix("postgresql://")
         if not value.startswith(("postgresql+asyncpg://", "sqlite+aiosqlite://")):
             raise ValueError("DATABASE_URL must use asyncpg or aiosqlite")
         return value

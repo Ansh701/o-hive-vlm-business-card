@@ -41,7 +41,9 @@ def build_api_router(
         return f"{action}:{host}"
 
     def enforce_rate(request: Request, action: str, limit: int) -> None:
-        if not limiter.allow(client_key(request, action), limit):
+        per_address_allowed = limiter.allow(client_key(request, action), limit)
+        global_allowed = limiter.allow(f"{action}:global", limit * 4)
+        if not per_address_allowed or not global_allowed:
             raise ServiceError(
                 429,
                 "rate_limited",
@@ -75,7 +77,23 @@ def build_api_router(
         file: Annotated[UploadFile, File()],
     ) -> Lead:
         enforce_rate(request, "card", settings.card_requests_per_minute)
-        content = await file.read(settings.max_file_bytes + 1)
+        declared_size = request.headers.get("content-length")
+        if declared_size is not None:
+            try:
+                request_size = int(declared_size)
+            except ValueError:
+                request_size = 0
+            if request_size > settings.max_file_bytes + 1024 * 1024:
+                raise ServiceError(
+                    413,
+                    "request_too_large",
+                    "This upload is larger than the per-card request limit. "
+                    "Resize it and try again.",
+                )
+        try:
+            content = await file.read(settings.max_file_bytes + 1)
+        finally:
+            await file.close()
         filename = file.filename or "business-card"
         return await process_card(
             session,

@@ -491,6 +491,33 @@ h2 {
   margin-bottom: 3px;
 }
 
+.restore-state {
+  align-items: center;
+  background: var(--glass);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  gap: 14px;
+  margin: clamp(28px, 7vw, 88px) auto;
+  max-width: 420px;
+  padding: 18px 20px;
+}
+
+.restore-state svg {
+  color: var(--accent);
+}
+
+.restore-state div {
+  display: grid;
+  gap: 3px;
+}
+
+.restore-state span {
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
 .file-tray,
 .review-panel,
 .failure-list {

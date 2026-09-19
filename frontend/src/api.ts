@@ -35,6 +35,18 @@ export async function createBatch(totalCards: number): Promise<Batch> {
   return (await response.json()) as Batch;
 }
 
+export async function getBatch(batchId: string): Promise<Batch> {
+  const response = await fetch(`/api/batches/${encodeURIComponent(batchId)}`);
+  if (!response.ok) throw await parseError(response);
+  return (await response.json()) as Batch;
+}
+
+export async function getLeads(batchId: string): Promise<Lead[]> {
+  const response = await fetch(`/api/batches/${encodeURIComponent(batchId)}/leads`);
+  if (!response.ok) throw await parseError(response);
+  return (await response.json()) as Lead[];
+}
+
 export function uploadCard(
   batchId: string,
   file: File,
@@ -44,6 +56,7 @@ export function uploadCard(
     const request = new XMLHttpRequest();
     request.open("POST", `/api/batches/${encodeURIComponent(batchId)}/cards`);
     request.responseType = "json";
+    request.timeout = 180_000;
     request.upload.addEventListener("progress", (event) => {
       if (event.lengthComputable) {
         onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
