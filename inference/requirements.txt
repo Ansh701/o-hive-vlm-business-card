@@ -4,4 +4,4 @@ pillow>=12.1,<13
 pydantic>=2.12,<3
 safetensors>=0.6,<1
 transformers>=5.10,<6
-uvicorn[standard]>=0.40,<1
+uvicorn[standard]>=0.53.0,<1
