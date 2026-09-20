@@ -24,7 +24,7 @@ AWS runs `Qwen/Qwen3-VL-2B-Instruct` at BF16 on one `m7i.xlarge` CPU instance. T
 - `backend/app/api.py`: typed HTTP contracts and status mapping.
 - `frontend/src/*`: local file validation/previews, real XMLHttpRequest upload progress, bounded processing, review editing, selection, export, and themes.
 - `inference/*`: AWS-only Qwen runtime with matching HMAC validation and structured extraction contract.
-- `infra/aws/*`: one-instance deployment, HMAC-validating Lambda URL proxy, security-group-only private model ingress, least-privilege roles, minimal storage/logging, no NAT gateway/load balancer/Elastic IP, and optional cost budget.
+- `infra/aws/*`: one-instance deployment, HMAC-validating Lambda URL proxy, security-group-only private model ingress, one narrowly scoped SSM interface endpoint for runtime secret retrieval, least-privilege roles, minimal storage/logging, no NAT gateway/load balancer/Elastic IP, and optional cost budget.
 
 ## Data model
 

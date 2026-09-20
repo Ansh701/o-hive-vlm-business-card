@@ -102,6 +102,9 @@ def test_aws_template_uses_measured_cpu_host_private_origin_and_bounded_proxy() 
     assert "Action: lambda:InvokeFunctionUrl" in template
     assert "Action: lambda:InvokeFunction" in template
     assert "SourceSecurityGroupId" in template
+    assert "AWS::EC2::VPCEndpoint" in template
+    assert "Action: ssm:GetParameter" in template
+    assert "resolve:ssm-secure" not in template
     assert "CidrIp: 0.0.0.0/0\n      Description: Authenticated" not in template
     assert "cloudflared" not in template.lower()
     for expensive_resource in (

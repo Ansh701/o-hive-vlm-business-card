@@ -42,6 +42,7 @@ flowchart TD
     DB[(Render PostgreSQL)]
     L[Lambda Function URL<br/>HMAC gate + private proxy]
     AWS[EC2 m7i.xlarge<br/>Qwen3-VL-2B-Instruct BF16 CPU]
+    SSM[SSM SecureString<br/>via PrivateLink]
     XLSX[Excel workbook]
 
     U -->|HTTPS| R
@@ -51,12 +52,13 @@ flowchart TD
     end
     API --> DB
     API -->|HTTPS + HMAC<br/>one sanitized card| L
+    L -->|Get one named secret| SSM
     L -->|security-group scoped<br/>private TCP 8001| AWS
     AWS -->|structured JSON text| API
     API --> XLSX
 ```
 
-The browser never receives AWS credentials or the inference secret. The EC2 model port accepts only traffic from the Lambda proxy security group; it has no public ingress. A Lambda Function URL supplies managed HTTPS and validates the same signed body before making the private VPC hop. This avoids a load balancer, NAT gateway, Elastic IP, public model port, and third-party tunnel account.
+The browser never receives AWS credentials or the inference secret. The EC2 model port accepts only traffic from the Lambda proxy security group; it has no public ingress. A Lambda Function URL supplies managed HTTPS and validates the same signed body before making the private VPC hop. Lambda retrieves only its named SecureString through a one-AZ SSM PrivateLink endpoint. This avoids a load balancer, NAT gateway, Elastic IP, public model port, and third-party tunnel account.
 
 ## Technology stack
 
@@ -115,7 +117,7 @@ Each upload request processes one card. The React client starts at most two requ
 
 ### Why a Lambda Function URL proxy
 
-Render needs a public HTTPS destination, but an Application Load Balancer has a fixed hourly cost. The small Lambda proxy provides AWS-managed TLS, validates a timestamped HMAC before proxying, and reaches the model only through security-group-scoped private networking. It has a 6,000,000-byte body limit and reserved concurrency of two. `AuthType: NONE` makes the URL reachable from Render; application HMAC is therefore the authorization boundary. Both function-URL permissions required for new URLs since October 2025 are declared explicitly. This is a cost-conscious demo boundary, not a replacement for a private network link in a production system.
+Render needs a public HTTPS destination, but an Application Load Balancer has a fixed hourly cost. The small Lambda proxy provides AWS-managed TLS, retrieves its one named HMAC key privately through SSM PrivateLink, validates the timestamped body, and reaches the model only through security-group-scoped private networking. It has a 6,000,000-byte body limit and reserved concurrency of two. `AuthType: NONE` makes the URL reachable from Render; application HMAC is therefore the authorization boundary. Both function-URL permissions required for new URLs since October 2025 are declared explicitly. This is a cost-conscious demo boundary, not a replacement for a private network link in a production system.
 
 ## Qwen model choice
 
@@ -147,16 +149,16 @@ The AWS model is a real service in `inference/`, not a proxy to another inferenc
 
 AWS does not describe this EC2 shape as universally free. Under the [current AWS Free Tier program](https://aws.amazon.com/free/free-tier-faqs/), eligible new customers receive credits, but eligibility and balance remain account-specific. On 2026-09-20 this account was an active paid plan with **$100 promotional credit remaining** and no returned free-tier-usage entries; standard pay-as-you-go pricing still applies and credits are not treated as a guarantee.
 
-The AWS bulk price feed queried on 2026-09-20 lists Linux `m7i.xlarge` in us-east-1 at **$0.2016/hour**. The estimate also uses [public IPv4 at $0.005/hour](https://aws.amazon.com/blogs/aws/new-aws-public-ipv4-address-charge-public-ip-insights/) and [gp3 at $0.08/GB-month](https://aws.amazon.com/ebs/pricing/). Calculations are performed by `scripts/calculate_aws_cost.py`, not mental arithmetic:
+The AWS bulk price feed queried on 2026-09-20 lists Linux `m7i.xlarge` in us-east-1 at **$0.2016/hour**. The estimate also uses [public IPv4 at $0.005/hour](https://aws.amazon.com/blogs/aws/new-aws-public-ipv4-address-charge-public-ip-insights/), [gp3 at $0.08/GB-month](https://aws.amazon.com/ebs/pricing/), and one [PrivateLink endpoint ENI at $0.01/hour](https://aws.amazon.com/privatelink/pricing/). Calculations are performed by `scripts/calculate_aws_cost.py`, not mental arithmetic:
 
 | On-Demand lifetime | Estimated total* |
 | --- | ---: |
-| 1 hour | $0.2110 |
-| 8-hour review window | $1.6879 |
-| 24 hours | $5.0636 |
-| 730-hour month | $154.0180 |
+| 1 hour | $0.2210 |
+| 8-hour review window | $1.7679 |
+| 24 hours | $5.3036 |
+| 730-hour month | $161.3180 |
 
-\*Compute + one auto-assigned public IPv4 + prorated 40 GB gp3, excluding tax, data transfer, and the tiny request-based Lambda cost. Promotional credits, if applicable, reduce the bill rather than the list price.
+\*Compute + one auto-assigned public IPv4 + prorated 40 GB gp3 + one PrivateLink endpoint ENI, excluding tax, per-GB data processing, and the tiny request-based Lambda cost. Promotional credits, if applicable, reduce the bill rather than the list price.
 
 Spot pricing changes by Availability Zone. Query it immediately before deployment instead of copying a stale number:
 
@@ -173,7 +175,7 @@ Cost guardrails:
 
 - On-Demand for evaluator reliability; Spot remains an explicit cheaper option with interruption risk.
 - One instance only, 40 GB encrypted gp3, no detailed monitoring.
-- No NAT gateway, load balancer, Elastic IP, or AWS database.
+- No NAT gateway, load balancer, Elastic IP, or AWS database; one SSM interface endpoint is the deliberate fixed-cost exception for private secret retrieval.
 - Lambda reserved concurrency of two and a request body cap below the 6 MB synchronous limit.
 - Actual 50/80/100% and forecast 100% budget alerts.
 - `MAX_DAILY_CARDS`, per-address/global throttles, upload limits, and concurrency limits.
@@ -230,7 +232,7 @@ Structured batches and leads remain until records are removed, the database is m
 - CSP, HSTS in production, frame denial, `nosniff`, referrer, and permissions headers.
 - Production debug/OpenAPI UI disabled; safe JSON errors do not expose stack traces.
 - Short-lived HMAC-SHA256 requests with a five-minute replay window.
-- Secrets come from a Render secret environment value, one SSM SecureString fetched by the EC2 role, and the Lambda environment resolved from that SecureString at deployment.
+- Secrets come from a Render secret environment value and one SSM SecureString fetched by both runtime roles; Lambda reaches SSM only through a one-AZ endpoint with role, endpoint-policy, and security-group restrictions.
 - EC2 IMDSv2, encrypted/delete-on-termination disk, no SSH key, and only security-group-sourced model ingress.
 - The EC2 role can read only the named bootstrap parameter plus Session Manager permissions. The Lambda role has only ENI lifecycle and scoped log-write actions.
 - Lambda enforces path/method, body size, five-minute timestamp freshness, constant-time HMAC comparison, a 70-second upstream timeout, and reserved concurrency of two.

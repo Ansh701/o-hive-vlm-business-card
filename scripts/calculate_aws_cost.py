@@ -7,6 +7,7 @@ ON_DEMAND_COMPUTE_PER_HOUR = Decimal("0.2016")
 PUBLIC_IPV4_PER_HOUR = Decimal("0.005")
 GP3_PER_GB_MONTH = Decimal("0.08")
 GP3_SIZE_GB = Decimal(40)
+INTERFACE_ENDPOINT_PER_HOUR = Decimal("0.01")
 HOURS_PER_MONTH = Decimal(730)
 
 
@@ -14,11 +15,13 @@ def estimate(hours: Decimal) -> dict[str, Decimal]:
     compute = ON_DEMAND_COMPUTE_PER_HOUR * hours
     public_ipv4 = PUBLIC_IPV4_PER_HOUR * hours
     storage = GP3_PER_GB_MONTH * GP3_SIZE_GB * hours / HOURS_PER_MONTH
+    private_link = INTERFACE_ENDPOINT_PER_HOUR * hours
     return {
         "compute": compute,
         "public_ipv4": public_ipv4,
         "storage": storage,
-        "total": compute + public_ipv4 + storage,
+        "private_link": private_link,
+        "total": compute + public_ipv4 + storage + private_link,
     }
 
 

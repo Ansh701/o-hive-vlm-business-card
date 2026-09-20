@@ -11,7 +11,7 @@ Metadata:
     must:
       - Qwen executes on this AWS instance; no third-party model inference
       - no public EC2 ingress, NAT gateway, load balancer, Elastic IP, or SSH key
-      - request HMAC secret comes from SSM SecureString and never reaches browser code
+      - request HMAC secret comes from SSM SecureString through PrivateLink and never reaches browser code
     ref:
       - at: README.md
         has: deployment steps, measured CPU viability, cost controls, shutdown procedure
@@ -113,6 +113,22 @@ Resources:
         - Key: Project
           Value: O-HIVE-Card-Leads
 
+  ParameterStoreEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: isolates the one-AZ SSM interface endpoint used for Lambda secret retrieval
+        must:
+          - no CIDR ingress or egress; HTTPS source remains ProxySecurityGroup only
+        mutable: change-with-constraints
+    Properties:
+      GroupDescription: O-HIVE SSM interface endpoint
+      VpcId: !Ref VpcId
+      SecurityGroupEgress: []
+      Tags:
+        - Key: Project
+          Value: O-HIVE-Card-Leads
+
   ProxyToInferenceEgress:
     Type: AWS::EC2::SecurityGroupEgress
     Metadata:
@@ -144,6 +160,26 @@ Resources:
       ToPort: 8001
       SourceSecurityGroupId: !GetAtt ProxySecurityGroup.GroupId
       Description: Authenticated Lambda proxy only
+
+  ProxyToParameterStoreEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt ProxySecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationSecurityGroupId: !GetAtt ParameterStoreEndpointSecurityGroup.GroupId
+      Description: Lambda secret lookup through PrivateLink
+
+  ProxyToParameterStoreIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt ParameterStoreEndpointSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !GetAtt ProxySecurityGroup.GroupId
+      Description: Lambda secret lookup only
 
   InferenceRole:
     Type: AWS::IAM::Role
@@ -327,9 +363,44 @@ Resources:
                   - logs:PutLogEvents
                 Resource: !Sub >-
                   arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-inference-proxy:*
+              - Sid: ReadOnlyNamedInferenceSecret
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${InferenceSecretParameterName}
       Tags:
         - Key: Project
           Value: O-HIVE-Card-Leads
+
+  ParameterStoreEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    DependsOn:
+      - ProxyToParameterStoreEgress
+      - ProxyToParameterStoreIngress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: lets the VPC Lambda retrieve its SecureString without a NAT gateway or public route
+        must:
+          - one subnet/ENI only to bound hourly PrivateLink cost
+          - endpoint policy remains restricted to the proxy role and one parameter
+        mutable: change-with-constraints
+    Properties:
+      VpcEndpointType: Interface
+      VpcId: !Ref VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssm
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PublicSubnetId]
+      SecurityGroupIds: [!Ref ParameterStoreEndpointSecurityGroup]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadOnlyNamedInferenceSecret
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt InferenceProxyRole.Arn
+            Action: ssm:GetParameter
+            Resource: !Sub >-
+              arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${InferenceSecretParameterName}
 
   InferenceProxyLogGroup:
     Type: AWS::Logs::LogGroup
@@ -347,6 +418,7 @@ Resources:
     Type: AWS::Lambda::Function
     DependsOn:
       - InferenceProxyLogGroup
+      - ParameterStoreEndpoint
       - ProxyToInferenceEgress
       - ProxyToInferenceIngress
     Metadata:
@@ -368,8 +440,8 @@ Resources:
       ReservedConcurrentExecutions: 2
       Environment:
         Variables:
+          INFERENCE_SECRET_PARAMETER_NAME: !Ref InferenceSecretParameterName
           MAX_REQUEST_BYTES: '6000000'
-          SHARED_SECRET: !Sub '{{resolve:ssm-secure:${InferenceSecretParameterName}}}'
           UPSTREAM_HOST: !GetAtt InferenceInstance.PrivateIp
       VpcConfig:
         SecurityGroupIds: [!Ref ProxySecurityGroup]
@@ -384,9 +456,23 @@ Resources:
           import os
           import time
 
+          import boto3
+
           MAX_REQUEST_BYTES = int(os.environ["MAX_REQUEST_BYTES"])
-          SHARED_SECRET = os.environ["SHARED_SECRET"]
+          INFERENCE_SECRET_PARAMETER_NAME = os.environ["INFERENCE_SECRET_PARAMETER_NAME"]
           UPSTREAM_HOST = os.environ["UPSTREAM_HOST"]
+          _shared_secret = None
+          _ssm = boto3.client("ssm")
+
+          def shared_secret():
+              global _shared_secret
+              if _shared_secret is None:
+                  result = _ssm.get_parameter(
+                      Name=INFERENCE_SECRET_PARAMETER_NAME,
+                      WithDecryption=True,
+                  )
+                  _shared_secret = result["Parameter"]["Value"]
+              return _shared_secret
 
           def response(status, detail):
               return {
@@ -421,7 +507,7 @@ Resources:
                   return response(401, "request signature expired")
               digest = hashlib.sha256(body).hexdigest()
               expected = "sha256=" + hmac.new(
-                  SHARED_SECRET.encode("utf-8"),
+                  shared_secret().encode("utf-8"),
                   f"{timestamp}.{digest}".encode("utf-8"),
                   hashlib.sha256,
               ).hexdigest()
