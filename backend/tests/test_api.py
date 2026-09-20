@@ -10,7 +10,7 @@ import httpx
 import pytest
 from PIL import Image
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.app.config import Settings
 from backend.app.inference import BusinessCardLead, InferenceServiceError
@@ -85,6 +85,24 @@ async def test_health_and_readiness_are_separate(
     assert health.json() == {"status": "alive"}
     assert ready.status_code == 200
     assert ready.json() == {"status": "ready", "database": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_readiness_rejects_connected_database_without_required_schema(
+    tmp_path: Any,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'empty.db'}")
+    empty_sessions = async_sessionmaker(engine, expire_on_commit=False)
+    client, _app = await make_client(empty_sessions, StubInference())
+
+    async with client:
+        health = await client.get("/health")
+        ready = await client.get("/ready")
+
+    await engine.dispose()
+    assert health.status_code == 200
+    assert ready.status_code == 503
+    assert ready.json() == {"status": "not_ready", "database": "schema_missing"}
 
 
 @pytest.mark.asyncio

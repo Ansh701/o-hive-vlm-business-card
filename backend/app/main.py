@@ -131,13 +131,20 @@ def create_app(
 
     @app.get("/ready")
     async def ready() -> JSONResponse:
+        database_connected = False
         try:
             async with sessions() as session:
                 await session.execute(text("SELECT 1"))
+                database_connected = True
+                await session.execute(text("SELECT 1 FROM batches LIMIT 1"))
+                await session.execute(text("SELECT 1 FROM leads LIMIT 1"))
         except SQLAlchemyError:
             return JSONResponse(
                 status_code=503,
-                content={"status": "not_ready", "database": "unavailable"},
+                content={
+                    "status": "not_ready",
+                    "database": "schema_missing" if database_connected else "unavailable",
+                },
             )
         return JSONResponse(content={"status": "ready", "database": "ok"})
 

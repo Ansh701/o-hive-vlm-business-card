@@ -75,14 +75,20 @@ def test_inference_image_uses_current_digest_pinned_runtime() -> None:
     assert "transformers>=5.10,<6" in requirements
 
 
-def test_render_blueprint_has_exactly_one_web_service_and_one_postgres() -> None:
+def test_render_blueprint_has_exactly_one_web_service_and_external_postgres() -> None:
     blueprint = yaml.safe_load((ROOT / "render.yaml").read_text(encoding="utf-8"))
 
     assert len(blueprint["services"]) == 1
     assert blueprint["services"][0]["type"] == "web"
     assert blueprint["services"][0]["runtime"] == "docker"
     assert blueprint["services"][0]["healthCheckPath"] == "/health"
-    assert len(blueprint["databases"]) == 1
+    assert "databases" not in blueprint
+    database_url = next(
+        item
+        for item in blueprint["services"][0]["envVars"]
+        if item["key"] == "DATABASE_URL"
+    )
+    assert database_url == {"key": "DATABASE_URL", "sync": False}
 
 
 def test_aws_template_uses_measured_cpu_host_private_origin_and_bounded_proxy() -> None:
