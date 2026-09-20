@@ -30,6 +30,8 @@ def test_settings_default_to_safe_local_values() -> None:
     assert settings.max_file_bytes == 4 * 1024 * 1024
     assert settings.max_total_bytes == 64 * 1024 * 1024
     assert settings.max_image_pixels == 24_000_000
+    assert settings.min_image_short_side == 100
+    assert settings.min_image_long_side == 160
     assert settings.inference_concurrency == 2
     assert settings.environment == "development"
 

@@ -4,18 +4,17 @@ A focused document-intelligence workspace for bulk business-card ingestion. User
 
 ## Assignment status
 
-The application, AWS Qwen service, model acceptance, and local verification are complete. The remaining Render deployment is reported as pending, not simulated:
+The application, AWS-hosted Qwen service, PostgreSQL schema, public deployment, and production acceptance flow are complete:
 
 | Deliverable | Status |
 | --- | --- |
-| Public application URL | **Pending** — Render account access is still required |
+| Public application URL | [o-hive-vlm-business-card.onrender.com](https://o-hive-vlm-business-card.onrender.com/) |
 | Public GitHub repository | [github.com/Ansh701/o-hive-vlm-business-card](https://github.com/Ansh701/o-hive-vlm-business-card) |
 | AWS Qwen inference | **Deployed and verified** — signed synthetic-card request returned all seven expected fields through Lambda to private EC2 |
+| Production acceptance | **Verified** — five real synthetic cards, persisted edit, Excel download, refresh recovery, and isolated invalid-file failure |
 | Local application/tests | Verified; see [Verification](#verification) |
 
-Expected production URL after deployment: `https://o-hive-vlm-business-card.onrender.com/`.
-
-No fallback model provider is used. Until the AWS endpoint is provisioned, extraction correctly returns a configuration error rather than silently calling OpenAI, Hugging Face Inference, Alibaba, or another hosted model.
+No fallback model provider is used. Production extraction calls the deployed AWS Qwen service; missing or invalid inference configuration returns a bounded error rather than silently calling OpenAI, Hugging Face Inference, Alibaba, or another hosted model.
 
 ## Assignment overview
 
@@ -78,7 +77,7 @@ The browser never receives AWS credentials or the inference secret. The EC2 mode
 ```text
 .
 ├── backend/
-│   ├── alembic/versions/0001_initial.py
+│   ├── alembic/versions/20260920_01_initial.py
 │   ├── app/                 # API, persistence, validation, inference client, export
 │   └── tests/               # backend, security, deployment, and evaluation tests
 ├── evaluation/
@@ -185,7 +184,7 @@ Cost guardrails:
 1. React validates extension, browser MIME, 4 MB size, and the 20-card UI limit immediately.
 2. The browser creates one batch and uploads cards independently with two workers.
 3. FastAPI checks the declared request size and reads at most `MAX_FILE_BYTES + 1`.
-4. Pillow verifies decoded JPEG/PNG/WEBP content, rejects decompression bombs and excessive dimensions, and re-encodes the image to drop metadata/trailing payloads.
+4. Pillow verifies decoded JPEG/PNG/WEBP content, rejects decompression bombs, undersized or excessive dimensions, and re-encodes the image to drop metadata/trailing payloads.
 5. SHA-256 detects duplicates inside the batch; the duplicate never triggers paid inference.
 6. The sanitized card and strict extraction instruction are signed and sent to AWS.
 7. JSON is parsed, validated by `BusinessCardLead`, and normalized. One repair/retry is allowed—never an unbounded loop.
@@ -226,6 +225,7 @@ Structured batches and leads remain until records are removed, the database is m
 
 - Actual image decode/format validation; extensions and `Content-Type` are not trusted.
 - Per-file, per-batch, total-byte, pixel, daily-card, and field-length limits.
+- A minimum 100 px short side and 160 px long side rejects images too small for reliable reading before paid inference.
 - SHA-256 deduplication and safe display-only filenames; no user filename becomes a path.
 - Same-origin production deployment, explicit development CORS, and trusted-host validation.
 - CSP, HSTS in production, frame denial, `nosniff`, referrer, and permissions headers.
@@ -305,6 +305,8 @@ Start from `.env.example`; never commit `.env`.
 | `MAX_FILE_BYTES` | 4 MiB |
 | `MAX_TOTAL_BYTES` | 64 MiB |
 | `MAX_IMAGE_PIXELS` | 24,000,000 |
+| `MIN_IMAGE_SHORT_SIDE` | 100 pixels; rejects unreadably small images before inference |
+| `MIN_IMAGE_LONG_SIDE` | 160 pixels; orientation-independent companion limit |
 | `MAX_DAILY_CARDS` | 100 in `render.yaml` |
 | `INFERENCE_CONCURRENCY` | 2 Render-to-model requests |
 | `INFERENCE_TIMEOUT_SECONDS` | 75 seconds per bounded attempt |
@@ -424,14 +426,19 @@ Delete the stack—not merely stop the instance—when the review window ends. K
 
 ## Render deployment
 
-1. Push the finished code to a public GitHub repository.
-2. In Render, create a Blueprint from `render.yaml`. It defines exactly one Docker web service and one PostgreSQL database.
-3. Set secret values for `AWS_INFERENCE_ENDPOINT` and `AWS_INFERENCE_SHARED_SECRET`.
-4. If the service name differs, update `ALLOWED_HOSTS` to its exact `onrender.com` hostname.
-5. Deploy and confirm `/health`, `/ready`, `/`, and a real upload.
-6. Run `python scripts/benchmark_batch.py --base-url https://<app>.onrender.com` and `python scripts/evaluate_extraction.py --base-url https://<app>.onrender.com`.
+The live deployment uses one free Docker Web Service and the existing free `rotorwatch-db` Render PostgreSQL service. It creates an isolated logical database, `o_hive_production`, with a dedicated `o_hive_prod` credential; no O-HIVE table is placed in the other application's database. The web service has `autoDeploy: false`, so GitHub is source hosting only—there is no CI/CD worker or automatic deploy hook.
 
-Current Render limitations matter: [free web services spin down after 15 minutes](https://render.com/docs/free), and free Render PostgreSQL databases expire after 30 days with no backups. Create the database close to the review window or upgrade it before expiry. A paid 512 MB web service is also the safer choice if cold starts would disrupt evaluation.
+For a fresh account:
+
+1. Push the finished code to a public GitHub repository.
+2. Create a Render Blueprint from `render.yaml`; keep exactly one Docker web service and one PostgreSQL service, or point `DATABASE_URL` at an isolated database/role in an existing PostgreSQL service.
+3. Set secret values for `DATABASE_URL`, `AWS_INFERENCE_ENDPOINT`, and `AWS_INFERENCE_SHARED_SECRET` in Render. Never place their values in the Blueprint or repository.
+4. If the service name differs, update `ALLOWED_HOSTS` to its exact `onrender.com` hostname.
+5. Manually deploy. The container runs `python -m alembic upgrade head` before Uvicorn and then serves both the Vite build and `/api` from one origin.
+6. Confirm `/health`, `/ready`, `/`, a real upload, an edit, refresh recovery, partial failure, and Excel export.
+7. Optionally run `python scripts/benchmark_batch.py --base-url https://<app>.onrender.com` and `python scripts/evaluate_extraction.py --base-url https://<app>.onrender.com`.
+
+Current Render limitations matter: [free web services spin down after 15 minutes](https://render.com/docs/free), and this free PostgreSQL service is scheduled to expire on **2026-10-12** with no backups. Upgrade or replace it before that date if the review window extends beyond it. A paid web service is also the safer choice if cold starts would disrupt evaluation.
 
 ## Tests
 
@@ -496,20 +503,21 @@ The initial host benchmark used the exact prompt and `Qwen/Qwen3-VL-2B-Instruct`
 
 Verified on 2026-09-20:
 
-- Backend: 91 pytest tests, Ruff clean, strict mypy clean across backend, inference, and scripts.
+- Backend: 93 pytest tests, Ruff clean, strict mypy clean across backend, inference, and scripts.
 - Frontend: 13 Vitest tests, ESLint clean, TypeScript clean, Vite production build successful.
 - Responsive/A11y: 15 automated viewport/state/theme combinations; widths 320, 375, 390, 430, 768, 1024, 1280, 1440, and 1920; no horizontal overflow or serious/critical Axe findings.
 - CloudFormation: `cfn-lint`, CloudFormation Guard 3.2.1, and the AWS `validate-template` API pass.
-- Migration: `alembic upgrade head` succeeds from a clean SQLite development database and creates only `alembic_version`, `batches`, and `leads`; production PostgreSQL verification remains part of Render acceptance.
+- Migration: `alembic upgrade head` succeeds from a clean SQLite development database and creates only `alembic_version`, `batches`, and `leads`. The production startup log records upgrade to `20260920_01_initial`; `/ready` verifies both required tables rather than only opening a connection.
 - AWS: both stacks are active; the $25 monthly budget has four alert thresholds, the Qwen endpoint passed real signed inference, and the nine-card/63-field evaluation completed.
 - Python dependency audits: application and inference requirement sets report no known vulnerabilities. The model base was upgraded from vulnerable Torch 2.6/Transformers 4.57 to Torch 2.14/Transformers 5.10+.
 - Frontend `npm ci` reported zero vulnerabilities.
-- Docker: the inference image built successfully on the production AWS host and its container reports healthy. The combined Render application image remains pending the Render build because Docker is not installed locally.
-- Clean production PostgreSQL migration, public Render E2E, and production URL remain pending the Render deployment stage.
+- Docker: the inference image built successfully on the production AWS host and reports healthy. Render built the combined multistage React + FastAPI image successfully and deployed it live.
+- Public production E2E: a five-card batch produced 5/5 leads through AWS Qwen; missing email/location stayed blank, a job title edit persisted after refresh, and the downloaded workbook contained the corrected value in the required seven-column order. A separate valid-card + fake-PNG run completed as `PARTIAL_SUCCESS` with one usable lead and one clear file error.
+- Theme/runtime: light mode was the production default, dark mode persisted across refresh, security headers were present, and `/health` plus schema-aware `/ready` returned 200.
 
 ## Known limitations
 
-- Blurry, cropped, reflective, stylized, handwritten, and low-contrast cards may reduce extraction quality.
+- Blurry, cropped, reflective, stylized, handwritten, and low-contrast cards may reduce extraction quality; images below the configured minimum dimensions are rejected before inference.
 - Names remain culturally ambiguous; uncertain splits should be left blank and reviewed.
 - National phone formats do not receive a guessed country.
 - CPU inference is deliberately cost-oriented; multi-card batches are much slower than a GPU service, and both model bootstrap and free Render cold start add latency.
@@ -524,7 +532,7 @@ Verified on 2026-09-20:
 
 ## Future improvements
 
-- Run the complete nine-card/63-field real-model evaluation, then evaluate 8-bit only if memory or throughput data justifies its accuracy trade-off.
+- Evaluate 8-bit only if future memory or throughput measurements justify its accuracy trade-off against the completed 63-field BF16 baseline.
 - Add authenticated workspaces and a batch-delete/retention control.
 - Add a small persisted job lease if production request interruption becomes a real issue.
 - Use a transactional usage-reservation row for a hard multi-request daily cap.

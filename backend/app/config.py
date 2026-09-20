@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     max_file_bytes: int = Field(default=4 * 1024 * 1024, ge=1024, le=25 * 1024 * 1024)
     max_total_bytes: int = Field(default=64 * 1024 * 1024, ge=1024, le=250 * 1024 * 1024)
     max_image_pixels: int = Field(default=24_000_000, ge=1_000_000, le=80_000_000)
+    min_image_short_side: int = Field(default=100, ge=32, le=2_000)
+    min_image_long_side: int = Field(default=160, ge=64, le=4_000)
     inference_concurrency: int = Field(default=2, ge=1, le=4)
     inference_timeout_seconds: float = Field(default=75.0, ge=5.0, le=180.0)
     max_daily_cards: int = Field(default=200, ge=1, le=10_000)

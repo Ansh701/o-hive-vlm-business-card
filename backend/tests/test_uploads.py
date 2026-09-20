@@ -79,6 +79,13 @@ def test_oversized_pixel_dimensions_are_rejected() -> None:
     assert error.value.code == "image_too_large"
 
 
+def test_low_resolution_image_is_rejected_before_inference() -> None:
+    with pytest.raises(UploadValidationError, match="resolution is too low") as error:
+        validate_image("tiny.png", image_bytes(size=(64, 64)), Settings())
+
+    assert error.value.code == "image_too_small"
+
+
 def test_decompression_bomb_warning_is_treated_as_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)
 
@@ -102,4 +109,3 @@ def test_source_filename_is_display_only_not_a_generated_path() -> None:
     assert ".." not in validated.display_filename
     assert "/" not in validated.display_filename
     assert "\\" not in validated.display_filename
-

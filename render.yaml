@@ -32,3 +32,7 @@ services:
         value: "20"
       - key: MAX_FILE_BYTES
         value: "4194304"
+      - key: MIN_IMAGE_SHORT_SIDE
+        value: "100"
+      - key: MIN_IMAGE_LONG_SIDE
+        value: "160"

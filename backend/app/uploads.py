@@ -90,6 +90,16 @@ def validate_image(filename: str, content: bytes, settings: Settings) -> Validat
             "image_too_large",
             "This image contains too many pixels. Resize it to a smaller resolution and try again.",
         )
+    short_side, long_side = sorted((width, height))
+    if (
+        short_side < settings.min_image_short_side
+        or long_side < settings.min_image_long_side
+    ):
+        raise UploadValidationError(
+            "image_too_small",
+            "This image resolution is too low to read reliably. "
+            "Upload a clearer, larger card image.",
+        )
 
     try:
         with warnings.catch_warnings():
