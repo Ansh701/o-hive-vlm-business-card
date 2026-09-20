@@ -11,9 +11,7 @@ services:
       - key: ENVIRONMENT
         value: production
       - key: DATABASE_URL
-        fromDatabase:
-          name: o-hive-card-leads-db
-          property: connectionString
+        sync: false
       - key: FRONTEND_DIST
         value: /app/frontend/dist
       - key: ALLOWED_HOSTS
@@ -34,9 +32,3 @@ services:
         value: "20"
       - key: MAX_FILE_BYTES
         value: "4194304"
-
-databases:
-  - name: o-hive-card-leads-db
-    plan: free
-    databaseName: o_hive
-    user: o_hive
