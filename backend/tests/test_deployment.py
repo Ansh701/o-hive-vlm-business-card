@@ -68,6 +68,7 @@ def test_inference_image_uses_current_digest_pinned_gpu_runtime() -> None:
     requirements = (ROOT / "inference/requirements.txt").read_text(encoding="utf-8")
 
     assert "pytorch/pytorch:2.14.0-cuda12.6-cudnn9-runtime@sha256:" in dockerfile
+    assert "PIP_BREAK_SYSTEM_PACKAGES=1" in dockerfile
     assert "torch==2.6.0" not in dockerfile
     assert "transformers>=5.10,<6" in requirements
 
