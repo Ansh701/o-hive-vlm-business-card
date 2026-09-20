@@ -92,8 +92,7 @@ The browser never receives AWS credentials or the inference secret. The EC2 mode
 ├── scripts/                 # generation, evaluation, benchmark, smoke, cost tools
 ├── Dockerfile               # one Render web service
 ├── docker-compose.yml       # local PostgreSQL + app
-├── render.yaml
-└── .github/workflows/       # CI and inference-image publication
+└── render.yaml
 ```
 
 ## Major technical decisions
@@ -238,7 +237,7 @@ Structured batches and leads remain until records are removed, the database is m
 - Lambda enforces path/method, body size, five-minute timestamp freshness, constant-time HMAC comparison, a 70-second upstream timeout, and reserved concurrency of two.
 - Privacy-safe JSON logs: IDs, durations, result/error categories, and 12-character hashes; no images, filenames, contact data, model bodies, or secrets.
 - Formula-injection defense in Excel.
-- Weekly Dependabot coverage and CI dependency audits.
+- Reproducible local lint, type, test, dependency-audit, and container checks; GitHub Actions is intentionally disabled for this repository.
 
 The public demo has no user accounts. Batch UUIDs therefore act as unguessable capability identifiers; anyone who learns one can read or edit that batch. Add authentication before handling non-demo customer data.
 
@@ -530,7 +529,7 @@ Verified on 2026-09-20:
 - Use a transactional usage-reservation row for a hard multi-request daily cap.
 - Add direct card/lead linking for richer source-side review without retaining raw images.
 - Add scheduled TTL cleanup for structured demo data.
-- Replace build-on-boot with a signed immutable ECR image after CI/package billing is restored.
+- Replace build-on-boot with a signed immutable ECR image only if a future deployment deliberately introduces a trusted image-publishing process.
 - Add a second Availability Zone/worker only if reliability requirements justify the cost.
 
 ## AI Usage
@@ -557,6 +556,7 @@ Recommendations rejected or modified:
 - Rejected a Cloudflare tunnel after finding that a small AWS Lambda proxy could provide TLS without another account/domain while preserving private EC2 ingress.
 - Rejected stale Torch 2.6/Transformers 4.57 dependencies after advisory scanning; upgraded to a current digest-pinned runtime.
 - Rejected invented full-suite accuracy, production deployment, and five-card latency claims; only completed measurements are reported.
+- Removed the initially added GitHub Actions/Dependabot automation at the repository owner's request; verification remains explicit and locally reproducible rather than CI/CD-driven.
 
 The candidate reviewed the generated recommendations, ran the verification described above, can explain the code and trade-offs, and remains responsible for the submission.
 
