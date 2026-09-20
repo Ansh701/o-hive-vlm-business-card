@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image
+from pydantic import BaseModel, ConfigDict
 
 PROMPT = """Extract ONLY information visible on this business card. Do not infer missing
-details. Return one JSON object with exactly these keys: first_name, last_name,
-job_title, company, location, phone_number, email, confidence, warnings. The seven
-contact fields must be strings or null. confidence must be an object and warnings an
-array. Return JSON only, with no markdown or explanation."""
+details. Return one JSON object with exactly these seven keys: first_name, last_name,
+job_title, company, location, phone_number, email. Every value must be a string or null.
+Do not return confidence, reasoning, totals, warnings, markdown, or any additional key."""
 
 OFFICIAL_FIELDS = (
     "first_name",
@@ -24,6 +24,18 @@ OFFICIAL_FIELDS = (
     "phone_number",
     "email",
 )
+
+
+class BenchmarkLead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    first_name: str | None
+    last_name: str | None
+    job_title: str | None
+    company: str | None
+    location: str | None
+    phone_number: str | None
+    email: str | None
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,7 +64,10 @@ def parse_model_json(text: str) -> dict[str, Any] | None:
         return None
     if not isinstance(value, dict) or any(field not in value for field in OFFICIAL_FIELDS):
         return None
-    return value
+    try:
+        return BenchmarkLead.model_validate(value).model_dump()
+    except ValueError:
+        return None
 
 
 def peak_rss_mb() -> float:

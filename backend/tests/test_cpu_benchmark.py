@@ -10,9 +10,7 @@ def test_parse_model_json_accepts_required_fields() -> None:
       "company": "Northstar Studio",
       "location": "Bengaluru, India",
       "phone_number": "+91 98765 43210",
-      "email": "mina@northstar.example",
-      "confidence": {},
-      "warnings": []
+      "email": "mina@northstar.example"
     }
     ```"""
 
@@ -24,3 +22,18 @@ def test_parse_model_json_accepts_required_fields() -> None:
 
 def test_parse_model_json_rejects_missing_official_field() -> None:
     assert parse_model_json('{"first_name":"Mina"}') is None
+
+
+def test_parse_model_json_rejects_additional_confidence_shape() -> None:
+    output = """{
+      "first_name": "Mina",
+      "last_name": "Patel",
+      "job_title": "Product Designer",
+      "company": "Northstar Studio",
+      "location": "Bengaluru, India",
+      "phone_number": "+91 98765 43210",
+      "email": "mina@northstar.example",
+      "confidence": {"total": 100, "reason": "clear"}
+    }"""
+
+    assert parse_model_json(output) is None
