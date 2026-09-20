@@ -306,6 +306,7 @@ Resources:
         UserData:
           Fn::Base64: !Sub |
             #!/usr/bin/env bash
+            # Instance creation depends on the SSM endpoint and both SG rules being ready.
             set -Eeuo pipefail
             umask 077
             dnf install -y -q docker git
