@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from decimal import ROUND_HALF_UP, Decimal
 
-ON_DEMAND_COMPUTE_PER_HOUR = Decimal("0.526")
+ON_DEMAND_COMPUTE_PER_HOUR = Decimal("0.2016")
 PUBLIC_IPV4_PER_HOUR = Decimal("0.005")
 GP3_PER_GB_MONTH = Decimal("0.08")
 GP3_SIZE_GB = Decimal(40)
@@ -28,7 +28,10 @@ def money(value: Decimal) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Deterministic us-east-1 on-demand cost estimate for the AWS Qwen host."
+        description=(
+            "Deterministic us-east-1 m7i.xlarge on-demand cost estimate for the AWS "
+            "Qwen CPU host."
+        )
     )
     parser.add_argument("--hours", type=Decimal, default=Decimal(8))
     arguments = parser.parse_args()

@@ -1,66 +1,61 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Cost-bounded Qwen VLM inference host — uses one small GPU EC2 instance and an
-  outbound-only Cloudflare Tunnel instead of a load balancer, NAT gateway, or public ingress
+  Cost-bounded Qwen VLM inference host - uses measured CPU EC2 plus an authenticated
+  Lambda Function URL proxy instead of a load balancer, NAT gateway, or public model port
 
 Metadata:
   AWSToolsMetrics:
     AWSAgentToolkit: aws-cloudformation@2
   com.aws.cloudformation.Context:
-    arch: Render -> HTTPS tunnel -> localhost-only Qwen container on EC2
+    arch: Render -> HTTPS Lambda URL -> SG-scoped private EC2 port -> Qwen container
     must:
       - Qwen executes on this AWS instance; no third-party model inference
-      - no inbound SG rules, NAT gateway, load balancer, Elastic IP, or SSH key
-      - both tunnel token & request HMAC secret come from SSM SecureString
+      - no public EC2 ingress, NAT gateway, load balancer, Elastic IP, or SSH key
+      - request HMAC secret comes from SSM SecureString and never reaches browser code
     ref:
       - at: README.md
-        has: deployment steps, cost controls, shutdown procedure
+        has: deployment steps, measured CPU viability, cost controls, shutdown procedure
         scope: repository
 
 Parameters:
   VpcId:
     Type: AWS::EC2::VPC::Id
-    Description: VPC containing an internet-routed public subnet; no NAT gateway is required.
+    Description: VPC containing the model host and the Lambda proxy.
   PublicSubnetId:
     Type: AWS::EC2::Subnet::Id
-    Description: Public subnet with a route to an internet gateway for outbound tunnel traffic.
+    Description: Internet-routed subnet used by EC2 for outbound model and image downloads.
+  VpcDnsResolverCidr:
+    Type: String
+    Default: 172.31.0.2/32
+    AllowedPattern: '^(?:\d{1,3}\.){3}\d{1,3}/32$'
+    Description: VPC AmazonProvidedDNS resolver address as one IPv4 /32.
   AmiId:
     Type: AWS::EC2::Image::Id
-    Description: Current Ubuntu/NVIDIA Deep Learning AMI with Docker and NVIDIA Container Toolkit.
+    Description: Current Amazon Linux 2023 x86_64 AMI resolved from the AWS public SSM path.
   InstanceType:
     Type: String
-    Default: g4dn.xlarge
-    AllowedValues: [g4dn.xlarge, g5.xlarge]
-    Description: g4dn.xlarge is the cost baseline; use g5.xlarge only when measured necessary.
+    Default: m7i.xlarge
+    AllowedValues: [m7i.xlarge]
+    Description: Measured 4-vCPU, 16-GiB CPU host for Qwen3-VL-2B bfloat16 inference.
   CapacityMode:
     Type: String
-    Default: Spot
+    Default: OnDemand
     AllowedValues: [Spot, OnDemand]
-    Description: Spot is cheaper but interruptions are acceptable only for the review demo.
-  InferenceImageUri:
+    Description: On-Demand is review-window reliable; Spot is cheaper but interruption-prone.
+  SourceRepository:
     Type: String
-    MinLength: 10
-    AllowedPattern: '^[A-Za-z0-9._:/@-]+$'
-    Description: Public immutable container image URI built from inference/Dockerfile.
-  CloudflaredImage:
+    Default: https://github.com/Ansh701/o-hive-vlm-business-card.git
+    AllowedPattern: '^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git$'
+    Description: Public source repository used to build the digest-pinned inference image.
+  SourceRevision:
     Type: String
-    Default: cloudflare/cloudflared:latest
-    AllowedPattern: '^cloudflare/cloudflared(:[A-Za-z0-9._-]+|@sha256:[a-f0-9]{64})$'
-    Description: Pin to a reviewed digest for a long-lived deployment.
+    AllowedPattern: '^[a-f0-9]{40}$'
+    Description: Full reviewed Git commit SHA built on the model host.
   InferenceSecretParameterName:
     Type: String
     Default: /o-hive/inference/hmac-secret
     AllowedPattern: '^/[A-Za-z0-9_.\-/]+$'
-    Description: Existing SSM SecureString containing the Render-to-model HMAC secret.
-  TunnelTokenParameterName:
-    Type: String
-    Default: /o-hive/inference/cloudflare-tunnel-token
-    AllowedPattern: '^/[A-Za-z0-9_.\-/]+$'
-    Description: Existing SSM SecureString containing one remotely managed tunnel token.
-  InferenceHostname:
-    Type: String
-    AllowedPattern: '^[A-Za-z0-9.-]+$'
-    Description: Hostname configured in Cloudflare Tunnel to proxy http://localhost:8001.
+    Description: Existing SSM SecureString shared only by Render, Lambda, and the model host.
   QwenModel:
     Type: String
     Default: Qwen/Qwen3-VL-2B-Instruct
@@ -74,32 +69,90 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Metadata:
       com.aws.cloudformation.Context:
-        why: egress-only origin; Cloudflare opens outbound HTTPS and no internet client reaches EC2 directly
+        why: model origin accepts only proxy SG traffic; outbound is limited to bootstrap needs
         must:
-          - never add inbound rules; request path is tunnel only
-          - outbound limited to TCP 443; cloudflared forced to HTTP/2
+          - never add CIDR ingress; TCP 8001 source remains ProxySecurityGroup only
+          - HTTPS egress stays bounded; DNS stays on the named VPC resolver /32
         mutable: change-with-constraints
     Properties:
-      GroupDescription: Outbound-only HTTPS for O-HIVE Qwen inference
+      GroupDescription: Private O-HIVE Qwen origin
       VpcId: !Ref VpcId
       SecurityGroupEgress:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
           CidrIp: 0.0.0.0/0
-          Description: HTTPS model/image downloads, SSM, and Cloudflare HTTP2 tunnel
+          Description: HTTPS source, package, model, SSM, and container downloads
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: !Ref VpcDnsResolverCidr
+          Description: VPC DNS
+        - IpProtocol: tcp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: !Ref VpcDnsResolverCidr
+          Description: VPC DNS fallback
       Tags:
         - Key: Project
           Value: O-HIVE-Card-Leads
+
+  ProxySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: isolates the VPC Lambda ENI and permits only the private model hop
+        must:
+          - no ingress; sole egress is TCP 8001 to InferenceSecurityGroup
+        mutable: change-with-constraints
+    Properties:
+      GroupDescription: O-HIVE inference Lambda proxy
+      VpcId: !Ref VpcId
+      SecurityGroupEgress: []
+      Tags:
+        - Key: Project
+          Value: O-HIVE-Card-Leads
+
+  ProxyToInferenceEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: gives the proxy exactly one reachable destination and port
+        must:
+          - destination remains InferenceSecurityGroup TCP 8001
+        mutable: change-with-constraints
+    Properties:
+      GroupId: !GetAtt ProxySecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 8001
+      ToPort: 8001
+      DestinationSecurityGroupId: !GetAtt InferenceSecurityGroup.GroupId
+      Description: Lambda proxy to Qwen service
+
+  ProxyToInferenceIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: model port is reachable only from the Lambda proxy ENI
+        must:
+          - source remains ProxySecurityGroup; never replace with a CIDR
+        mutable: change-with-constraints
+    Properties:
+      GroupId: !GetAtt InferenceSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 8001
+      ToPort: 8001
+      SourceSecurityGroupId: !GetAtt ProxySecurityGroup.GroupId
+      Description: Authenticated Lambda proxy only
 
   InferenceRole:
     Type: AWS::IAM::Role
     Metadata:
       com.aws.cloudformation.Context:
-        why: lets the instance use Session Manager and fetch only its two bootstrap secrets
+        why: lets the instance use Session Manager and fetch only its bootstrap HMAC secret
         must:
-          - no EC2 application credentials; browser & Render never receive AWS keys
-          - GetParameter scope stays on the two named SecureStrings
+          - no application AWS keys; browser and Render never receive this role
+          - GetParameter scope stays on the named SecureString
         mutable: change-with-constraints
     Properties:
       AssumeRolePolicyDocument:
@@ -112,22 +165,27 @@ Resources:
       ManagedPolicyArns:
         - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
       Policies:
-        - PolicyName: ReadInferenceBootstrapSecrets
+        - PolicyName: ReadInferenceBootstrapSecret
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: ReadOnlyNamedParameters
+              - Sid: ReadOnlyNamedParameter
                 Effect: Allow
                 Action: ssm:GetParameter
-                Resource:
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${InferenceSecretParameterName}
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TunnelTokenParameterName}
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${InferenceSecretParameterName}
       Tags:
         - Key: Project
           Value: O-HIVE-Card-Leads
 
   InferenceInstanceProfile:
     Type: AWS::IAM::InstanceProfile
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: attaches the replaceable model-host role without long-lived access keys
+        must:
+          - contains only InferenceRole
+        mutable: change-with-constraints
     Properties:
       Roles: [!Ref InferenceRole]
 
@@ -135,11 +193,11 @@ Resources:
     Type: AWS::EC2::LaunchTemplate
     Metadata:
       com.aws.cloudformation.Context:
-        why: captures hardened GPU boot config; Spot saves cost, OnDemand is review-window fallback
+        why: captures measured CPU boot config; On-Demand favors evaluator reliability
         must:
-          - IMDSv2 required, encrypted 40GiB gp3, no SSH key
-          - model port bound to 127.0.0.1 only; tunnel is sole network path
-          - stop or delete stack outside review window
+          - IMDSv2 required, encrypted 40-GiB gp3, no SSH key
+          - model port has no public CIDR path; proxy SG is sole caller
+          - source revision is a full immutable commit SHA
         mutable: review-required
         mutability:
           LaunchTemplateData: change-with-constraints
@@ -168,7 +226,7 @@ Resources:
             Groups: [!Ref InferenceSecurityGroup]
             SubnetId: !Ref PublicSubnetId
         BlockDeviceMappings:
-          - DeviceName: /dev/sda1
+          - DeviceName: /dev/xvda
             Ebs:
               DeleteOnTermination: true
               Encrypted: true
@@ -183,8 +241,8 @@ Resources:
                 Value: !Sub ${AWS::StackName}-qwen
               - Key: Project
                 Value: O-HIVE-Card-Leads
-              - Key: InferenceHostname
-                Value: !Ref InferenceHostname
+              - Key: SourceRevision
+                Value: !Ref SourceRevision
           - ResourceType: volume
             Tags:
               - Key: Project
@@ -194,39 +252,35 @@ Resources:
             #!/usr/bin/env bash
             set -Eeuo pipefail
             umask 077
-            command -v aws >/dev/null
-            command -v docker >/dev/null
-            command -v nvidia-smi >/dev/null
+            dnf install -y -q docker git
             systemctl enable --now docker
             install -d -m 0711 /run/o-hive
             install -d -m 0755 -o 10001 -g 10001 /opt/o-hive/model-cache
             aws ssm get-parameter --name '${InferenceSecretParameterName}' --with-decryption --query Parameter.Value --output text > /run/o-hive/inference-secret
-            aws ssm get-parameter --name '${TunnelTokenParameterName}' --with-decryption --query Parameter.Value --output text > /run/o-hive/tunnel-token
             chown 10001:10001 /run/o-hive/inference-secret
-            chown 65532:65532 /run/o-hive/tunnel-token
-            chmod 0400 /run/o-hive/inference-secret /run/o-hive/tunnel-token
-            docker pull '${InferenceImageUri}'
+            chmod 0400 /run/o-hive/inference-secret
+            git clone --quiet '${SourceRepository}' /opt/o-hive/source
+            git -C /opt/o-hive/source checkout --quiet '${SourceRevision}'
+            docker build --pull --tag 'o-hive-inference:${SourceRevision}' --file /opt/o-hive/source/inference/Dockerfile /opt/o-hive/source
             docker run --detach --name o-hive-inference --restart unless-stopped \
-              --gpus all --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
-              --publish 127.0.0.1:8001:8001 \
+              --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+              --publish 8001:8001 \
               --volume /opt/o-hive/model-cache:/opt/model-cache \
               --volume /run/o-hive/inference-secret:/run/secrets/inference-secret:ro \
               --env INFERENCE_SHARED_SECRET_FILE=/run/secrets/inference-secret \
               --env QWEN_MODEL='${QwenModel}' \
-              --env MODEL_DTYPE=float16 \
-              '${InferenceImageUri}'
-            docker pull '${CloudflaredImage}'
-            docker run --detach --name o-hive-tunnel --restart unless-stopped \
-              --network host --read-only --tmpfs /tmp:rw,noexec,nosuid,size=32m \
-              --volume /run/o-hive/tunnel-token:/run/secrets/tunnel-token:ro \
-              --env TUNNEL_TOKEN_FILE=/run/secrets/tunnel-token \
-              '${CloudflaredImage}' tunnel --no-autoupdate --protocol http2 --loglevel warn run
+              --env MODEL_DEVICE=cpu \
+              --env MODEL_DTYPE=bfloat16 \
+              --env TORCH_NUM_THREADS=4 \
+              --env MAX_IMAGE_BYTES=4194304 \
+              --env MAX_REQUEST_BYTES=6000000 \
+              'o-hive-inference:${SourceRevision}'
 
   InferenceInstance:
     Type: AWS::EC2::Instance
     Metadata:
       com.aws.cloudformation.Context:
-        why: one replaceable GPU worker created from the reviewed launch template
+        why: one replaceable CPU worker created from the reviewed launch template
         must:
           - run no more than one demo worker to bound spend
         mutable: review-required
@@ -235,10 +289,205 @@ Resources:
         LaunchTemplateId: !Ref InferenceLaunchTemplate
         Version: !GetAtt InferenceLaunchTemplate.LatestVersionNumber
 
+  InferenceProxyRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: gives the synchronous proxy only ENI lifecycle and scoped log-write permissions
+        must:
+          - no model, SSM, data-store, or administrative permissions
+          - wildcard EC2 resources remain limited to ENI APIs that cannot be ARN-scoped
+        mutable: change-with-constraints
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: VpcAndLogsOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ManageFunctionEni
+                Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                  - ec2:AssignPrivateIpAddresses
+                  - ec2:UnassignPrivateIpAddresses
+                Resource: '*'
+              - Sid: WriteOnlyOwnLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-inference-proxy:*
+      Tags:
+        - Key: Project
+          Value: O-HIVE-Card-Leads
+
+  InferenceProxyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: bounds diagnostic retention; handler never logs request bodies or extracted PII
+        must:
+          - retention stays finite; no request body logging
+        mutable: change-with-constraints
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-inference-proxy
+      RetentionInDays: 7
+
+  InferenceProxyFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - InferenceProxyLogGroup
+      - ProxyToInferenceEgress
+      - ProxyToInferenceIngress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: supplies AWS-managed HTTPS without fixed LB/NAT cost; validates HMAC before private hop
+        must:
+          - request body capped below Lambda 6-MB synchronous limit
+          - reserved concurrency remains <= 2 to protect the single CPU model worker
+          - never log request body, signature, secret, or model response
+        mutable: change-with-constraints
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-inference-proxy
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: index.handler
+      Role: !GetAtt InferenceProxyRole.Arn
+      MemorySize: 256
+      Timeout: 80
+      ReservedConcurrentExecutions: 2
+      Environment:
+        Variables:
+          MAX_REQUEST_BYTES: '6000000'
+          SHARED_SECRET: !Sub '{{resolve:ssm-secure:${InferenceSecretParameterName}}}'
+          UPSTREAM_HOST: !GetAtt InferenceInstance.PrivateIp
+      VpcConfig:
+        SecurityGroupIds: [!Ref ProxySecurityGroup]
+        SubnetIds: [!Ref PublicSubnetId]
+      Code:
+        ZipFile: |
+          import base64
+          import hashlib
+          import hmac
+          import http.client
+          import json
+          import os
+          import time
+
+          MAX_REQUEST_BYTES = int(os.environ["MAX_REQUEST_BYTES"])
+          SHARED_SECRET = os.environ["SHARED_SECRET"]
+          UPSTREAM_HOST = os.environ["UPSTREAM_HOST"]
+
+          def response(status, detail):
+              return {
+                  "statusCode": status,
+                  "headers": {
+                      "content-type": "application/json",
+                      "x-content-type-options": "nosniff",
+                  },
+                  "body": json.dumps({"detail": detail}),
+              }
+
+          def handler(event, _context):
+              if event.get("requestContext", {}).get("http", {}).get("method") != "POST":
+                  return response(404, "not found")
+              if event.get("rawPath") != "/v1/extract":
+                  return response(404, "not found")
+              encoded = event.get("body") or ""
+              try:
+                  body = base64.b64decode(encoded, validate=True) if event.get("isBase64Encoded") else encoded.encode("utf-8")
+              except (ValueError, TypeError):
+                  return response(400, "invalid body")
+              if not body or len(body) > MAX_REQUEST_BYTES:
+                  return response(413, "request too large")
+              headers = {str(key).lower(): str(value) for key, value in (event.get("headers") or {}).items()}
+              timestamp = headers.get("x-o-hive-timestamp", "")
+              signature = headers.get("x-o-hive-signature", "")
+              try:
+                  signed_at = int(timestamp)
+              except ValueError:
+                  return response(401, "invalid request timestamp")
+              if abs(int(time.time()) - signed_at) > 300:
+                  return response(401, "request signature expired")
+              digest = hashlib.sha256(body).hexdigest()
+              expected = "sha256=" + hmac.new(
+                  SHARED_SECRET.encode("utf-8"),
+                  f"{timestamp}.{digest}".encode("utf-8"),
+                  hashlib.sha256,
+              ).hexdigest()
+              if not hmac.compare_digest(expected, signature):
+                  return response(401, "invalid request signature")
+              connection = http.client.HTTPConnection(UPSTREAM_HOST, 8001, timeout=70)
+              try:
+                  connection.request(
+                      "POST",
+                      "/v1/extract",
+                      body=body,
+                      headers={
+                          "content-type": "application/json",
+                          "content-length": str(len(body)),
+                          "x-o-hive-timestamp": timestamp,
+                          "x-o-hive-signature": signature,
+                      },
+                  )
+                  upstream = connection.getresponse()
+                  result = upstream.read(MAX_REQUEST_BYTES)
+                  return {
+                      "statusCode": upstream.status,
+                      "headers": {
+                          "content-type": "application/json",
+                          "x-content-type-options": "nosniff",
+                      },
+                      "body": result.decode("utf-8"),
+                  }
+              except (OSError, TimeoutError, http.client.HTTPException):
+                  return response(502, "model service unavailable")
+              finally:
+                  connection.close()
+
+  InferenceProxyUrl:
+    Type: AWS::Lambda::Url
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: provides public TLS to Render; application HMAC is the authorization boundary
+        must:
+          - NONE auth stays paired with in-code HMAC, reserved concurrency, and body limit
+        mutable: change-with-constraints
+    Properties:
+      AuthType: NONE
+      InvokeMode: BUFFERED
+      TargetFunctionArn: !GetAtt InferenceProxyFunction.Arn
+
+  InferenceProxyUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunctionUrl
+      FunctionName: !Ref InferenceProxyFunction
+      FunctionUrlAuthType: NONE
+      Principal: '*'
+
+  InferenceProxyInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref InferenceProxyFunction
+      InvokedViaFunctionUrl: true
+      Principal: '*'
+
 Outputs:
   InstanceId:
-    Description: Instance for Session Manager diagnostics; no SSH port is open.
+    Description: Model host for Session Manager diagnostics; no SSH port is open.
     Value: !Ref InferenceInstance
-  InferenceBaseUrl:
-    Description: Authenticated HTTPS tunnel origin configured in the Render service.
-    Value: !Sub https://${InferenceHostname}
+  InferenceEndpoint:
+    Description: HMAC-authenticated HTTPS endpoint configured only in the Render service.
+    Value: !Join ['', [!GetAtt InferenceProxyUrl.FunctionUrl, v1/extract]]

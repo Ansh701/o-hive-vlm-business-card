@@ -39,7 +39,7 @@ import {
 } from "./api";
 import type { Lead, LeadFields, LeadPatch } from "./types";
 
-const MAX_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_CARDS = 20;
 const ACCEPTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp"]);
 const ACCEPTED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -77,7 +77,7 @@ function validationMessage(file: File): string | null {
   if (!ACCEPTED_EXTENSIONS.has(extension) || !ACCEPTED_TYPES.has(file.type)) {
     return "JPEG, PNG, and WEBP files only.";
   }
-  if (file.size > MAX_FILE_BYTES) return "This file is larger than the 8 MB limit.";
+  if (file.size > MAX_FILE_BYTES) return "This file is larger than the 4 MB limit.";
   return null;
 }
 
@@ -210,7 +210,7 @@ function UploadSurface({ dragging, onDrag, onDrop, onChoose }: UploadSurfaceProp
           onChange={handleChange}
         />
       </label>
-      <p className="constraints">Up to 20 cards · 8 MB each</p>
+      <p className="constraints">Up to 20 cards · 4 MB each</p>
     </div>
   );
 }

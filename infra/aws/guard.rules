@@ -1,5 +1,6 @@
 let launch_templates = Resources.*[ Type == 'AWS::EC2::LaunchTemplate' ]
 let security_groups = Resources.*[ Type == 'AWS::EC2::SecurityGroup' ]
+let security_group_ingress = Resources.*[ Type == 'AWS::EC2::SecurityGroupIngress' ]
 let nat_gateways = Resources.*[ Type == 'AWS::EC2::NatGateway' ]
 let load_balancers = Resources.*[
   Type == 'AWS::ElasticLoadBalancingV2::LoadBalancer' or
@@ -8,7 +9,7 @@ let load_balancers = Resources.*[
 let elastic_ips = Resources.*[ Type == 'AWS::EC2::EIP' ]
 let budgets = Resources.*[ Type == 'AWS::Budgets::Budget' ]
 
-rule gpu_host_uses_hardened_launch_template when %launch_templates !empty {
+rule model_host_uses_hardened_launch_template when %launch_templates !empty {
   %launch_templates.Properties.LaunchTemplateData.MetadataOptions.HttpTokens == 'required'
   %launch_templates.Properties.LaunchTemplateData.MetadataOptions.HttpEndpoint == 'enabled'
   %launch_templates.Properties.LaunchTemplateData.BlockDeviceMappings.*.Ebs.Encrypted == true
@@ -16,8 +17,14 @@ rule gpu_host_uses_hardened_launch_template when %launch_templates !empty {
   %launch_templates.Properties.LaunchTemplateData.BlockDeviceMappings.*.Ebs.VolumeSize <= 40
 }
 
-rule inference_origin_has_no_inbound_rules when %security_groups !empty {
-  %security_groups.Properties.SecurityGroupIngress empty
+rule security_groups_have_no_public_ingress when %security_groups !empty {
+  %security_groups.Properties.SecurityGroupIngress not exists
+}
+
+rule ingress_rules_are_security_group_scoped when %security_group_ingress !empty {
+  %security_group_ingress.Properties.SourceSecurityGroupId exists
+  %security_group_ingress.Properties.CidrIp not exists
+  %security_group_ingress.Properties.CidrIpv6 not exists
 }
 
 rule no_fixed_cost_networking {

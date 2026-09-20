@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     frontend_dist: Path = Path("frontend/dist")
 
     max_cards_per_batch: int = Field(default=20, ge=1, le=50)
-    max_file_bytes: int = Field(default=8 * 1024 * 1024, ge=1024, le=25 * 1024 * 1024)
+    max_file_bytes: int = Field(default=4 * 1024 * 1024, ge=1024, le=25 * 1024 * 1024)
     max_total_bytes: int = Field(default=64 * 1024 * 1024, ge=1024, le=250 * 1024 * 1024)
     max_image_pixels: int = Field(default=24_000_000, ge=1_000_000, le=80_000_000)
     inference_concurrency: int = Field(default=2, ge=1, le=4)

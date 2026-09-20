@@ -6,6 +6,7 @@ from uuid import UUID
 import httpx
 import pytest
 from openpyxl import load_workbook
+from openpyxl.worksheet.worksheet import Worksheet
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.app.config import Settings
@@ -33,9 +34,10 @@ def lead(**changes: object) -> Lead:
     return Lead(**values)
 
 
-def workbook_rows(payload: bytes) -> tuple[object, list[tuple[object, ...]]]:
+def workbook_rows(payload: bytes) -> tuple[Worksheet, list[tuple[object, ...]]]:
     workbook = load_workbook(BytesIO(payload), data_only=False)
     sheet = workbook.active
+    assert isinstance(sheet, Worksheet)
     return sheet, list(sheet.iter_rows(values_only=True))
 
 

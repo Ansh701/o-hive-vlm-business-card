@@ -85,7 +85,7 @@ describe("business card workflow", () => {
     render(<App />);
     expect(screen.getByRole("heading", { name: "Drop business cards here" })).toBeVisible();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
-    expect(screen.getByText("Up to 20 cards · 8 MB each")).toBeVisible();
+    expect(screen.getByText("Up to 20 cards · 4 MB each")).toBeVisible();
   });
 
   it("validates unsupported files immediately", () => {

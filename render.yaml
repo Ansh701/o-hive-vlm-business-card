@@ -32,6 +32,8 @@ services:
         value: "75"
       - key: MAX_CARDS_PER_BATCH
         value: "20"
+      - key: MAX_FILE_BYTES
+        value: "4194304"
 
 databases:
   - name: o-hive-card-leads-db

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import textwrap
 from pathlib import Path
 
 import httpx
@@ -63,7 +65,7 @@ def test_root_dockerfile_builds_frontend_then_runs_single_fastapi_service() -> N
     assert "USER app" in dockerfile
 
 
-def test_inference_image_uses_current_digest_pinned_gpu_runtime() -> None:
+def test_inference_image_uses_current_digest_pinned_runtime() -> None:
     dockerfile = (ROOT / "inference/Dockerfile").read_text(encoding="utf-8")
     requirements = (ROOT / "inference/requirements.txt").read_text(encoding="utf-8")
 
@@ -83,23 +85,40 @@ def test_render_blueprint_has_exactly_one_web_service_and_one_postgres() -> None
     assert len(blueprint["databases"]) == 1
 
 
-def test_aws_template_uses_small_gpu_hardening_and_no_fixed_cost_networking() -> None:
+def test_aws_template_uses_measured_cpu_host_private_origin_and_bounded_proxy() -> None:
     template = (ROOT / "infra/aws/inference-ec2.yaml").read_text(encoding="utf-8")
 
     assert "AWSAgentToolkit: aws-cloudformation@2" in template
-    assert "g4dn.xlarge" in template
+    assert "m7i.xlarge" in template
     assert "HttpTokens: required" in template
     assert "Encrypted: true" in template
     assert "VolumeSize: 40" in template
-    assert "MODEL_DTYPE=float16" in template
-    assert "cloudflared" in template.lower()
-    assert "SecurityGroupIngress" not in template
+    assert "MODEL_DEVICE=cpu" in template
+    assert "MODEL_DTYPE=bfloat16" in template
+    assert "TORCH_NUM_THREADS=4" in template
+    assert "AWS::Lambda::Function" in template
+    assert "AWS::Lambda::Url" in template
+    assert "ReservedConcurrentExecutions: 2" in template
+    assert "Action: lambda:InvokeFunctionUrl" in template
+    assert "Action: lambda:InvokeFunction" in template
+    assert "SourceSecurityGroupId" in template
+    assert "CidrIp: 0.0.0.0/0\n      Description: Authenticated" not in template
+    assert "cloudflared" not in template.lower()
     for expensive_resource in (
         "AWS::EC2::NatGateway",
         "AWS::EC2::EIP",
         "AWS::ElasticLoadBalancingV2::LoadBalancer",
     ):
         assert expensive_resource not in template
+
+
+def test_inline_lambda_proxy_is_valid_python() -> None:
+    template = (ROOT / "infra/aws/inference-ec2.yaml").read_text(encoding="utf-8")
+    inline = template.split("      Code:\n        ZipFile: |\n", 1)[1].split(
+        "\n\n  InferenceProxyUrl:", 1
+    )[0]
+
+    ast.parse(textwrap.dedent(inline), filename="inference-proxy-inline.py")
 
 
 def test_budget_template_contains_actual_and_forecast_alerts() -> None:

@@ -11,6 +11,10 @@ from backend.app.models import Batch, BatchStatus, Lead, LeadStatus
 from backend.app.schemas import BatchCreate, LeadPatch
 
 
+def assert_batch_status(batch: Batch, expected: BatchStatus) -> None:
+    assert batch.status is expected
+
+
 def test_settings_rejects_unsafe_upload_limits() -> None:
     with pytest.raises(ValidationError):
         Settings(max_cards_per_batch=0)
@@ -23,7 +27,7 @@ def test_settings_default_to_safe_local_values() -> None:
     settings = Settings()
 
     assert settings.max_cards_per_batch == 20
-    assert settings.max_file_bytes == 8 * 1024 * 1024
+    assert settings.max_file_bytes == 4 * 1024 * 1024
     assert settings.max_total_bytes == 64 * 1024 * 1024
     assert settings.max_image_pixels == 24_000_000
     assert settings.inference_concurrency == 2
@@ -58,12 +62,12 @@ def test_batch_terminal_status_is_derived_from_card_outcomes() -> None:
     batch = Batch(total_cards=3)
 
     batch.record_result(LeadStatus.SUCCESS)
-    assert batch.status is BatchStatus.PROCESSING
+    assert_batch_status(batch, BatchStatus.PROCESSING)
     batch.record_result(LeadStatus.PARTIAL)
-    assert batch.status is BatchStatus.PROCESSING
+    assert_batch_status(batch, BatchStatus.PROCESSING)
     batch.record_result(LeadStatus.FAILED)
 
-    assert batch.status is BatchStatus.PARTIAL_SUCCESS
+    assert_batch_status(batch, BatchStatus.PARTIAL_SUCCESS)
     assert batch.processed_cards == 3
     assert batch.successful_cards == 2
     assert batch.failed_cards == 1

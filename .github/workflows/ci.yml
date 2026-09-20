@@ -33,7 +33,7 @@ jobs:
       - run: pip-audit . --progress-spinner off
       - run: pip-audit -r inference/requirements.txt --progress-spinner off
       - run: ruff check backend scripts inference
-      - run: mypy backend/app scripts inference
+      - run: mypy backend inference scripts
       - run: pytest -q
       - name: Clean PostgreSQL migration
         env:

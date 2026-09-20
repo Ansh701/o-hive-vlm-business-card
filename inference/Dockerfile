@@ -7,10 +7,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     HF_HOME=/opt/model-cache
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /service
 COPY inference/requirements.txt ./requirements.txt
 RUN python -m pip install --no-cache-dir -r requirements.txt
@@ -23,6 +19,6 @@ RUN useradd --create-home --uid 10001 model \
 USER model
 EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10m --retries=3 \
-    CMD curl --fail http://127.0.0.1:8001/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=4)" || exit 1
 
 CMD ["python", "-m", "uvicorn", "inference.app:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1", "--no-server-header"]

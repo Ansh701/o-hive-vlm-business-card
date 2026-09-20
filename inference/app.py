@@ -17,7 +17,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from inference.security import SignatureError, verify_signature
 
 MODEL_ID = os.getenv("QWEN_MODEL", "Qwen/Qwen3-VL-2B-Instruct")
-MODEL_DTYPE = os.getenv("MODEL_DTYPE", "float16")
+MODEL_DEVICE = os.getenv("MODEL_DEVICE", "cpu").lower()
+MODEL_DTYPE = os.getenv("MODEL_DTYPE", "bfloat16").lower()
+TORCH_NUM_THREADS = int(os.getenv("TORCH_NUM_THREADS", "4"))
 
 
 def _shared_secret() -> str:
@@ -32,8 +34,8 @@ def _shared_secret() -> str:
 
 
 SHARED_SECRET = _shared_secret()
-MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(8 * 1024 * 1024)))
-MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", str(13 * 1024 * 1024)))
+MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(4 * 1024 * 1024)))
+MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", "6000000"))
 PRELOAD_MODEL = os.getenv("PRELOAD_MODEL", "true").lower() == "true"
 ALLOWED_MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
@@ -73,19 +75,28 @@ class QwenRuntime:
         import torch
         from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA is required for the configured AWS inference service")
+        if MODEL_DEVICE not in {"cpu", "cuda"}:
+            raise RuntimeError("MODEL_DEVICE must be cpu or cuda")
+        if MODEL_DEVICE == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA is unavailable for the configured model device")
         try:
-            model_dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16}[
-                MODEL_DTYPE
-            ]
+            model_dtype = {
+                "float16": torch.float16,
+                "bfloat16": torch.bfloat16,
+                "float32": torch.float32,
+            }[MODEL_DTYPE]
         except KeyError as exc:
-            raise RuntimeError("MODEL_DTYPE must be float16 or bfloat16") from exc
+            raise RuntimeError("MODEL_DTYPE must be float16, bfloat16, or float32") from exc
+        if MODEL_DEVICE == "cpu":
+            if TORCH_NUM_THREADS < 1:
+                raise RuntimeError("TORCH_NUM_THREADS must be at least 1")
+            torch.set_num_threads(TORCH_NUM_THREADS)
+            torch.set_num_interop_threads(1)
         self.processor = AutoProcessor.from_pretrained(MODEL_ID)
         self.model = Qwen3VLForConditionalGeneration.from_pretrained(
             MODEL_ID,
             dtype=model_dtype,
-            device_map="cuda",
+            device_map=MODEL_DEVICE,
             low_cpu_mem_usage=True,
         )
         self.model.eval()
@@ -157,7 +168,12 @@ async def health() -> dict[str, str]:
 async def ready() -> dict[str, str | bool]:
     if not runtime.loaded:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="model loading")
-    return {"status": "ready", "model": MODEL_ID, "loaded": True}
+    return {
+        "status": "ready",
+        "model": MODEL_ID,
+        "device": MODEL_DEVICE,
+        "loaded": True,
+    }
 
 
 @app.post("/v1/extract", response_model=ExtractionResponse)

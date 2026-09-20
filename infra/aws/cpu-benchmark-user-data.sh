@@ -32,7 +32,7 @@ systemctl enable --now docker >>/var/log/o-hive-cpu-benchmark-detail.log 2>&1
 
 echo "O_HIVE_CPU_BENCHMARK_STAGE=checkout"
 git clone --quiet https://github.com/Ansh701/o-hive-vlm-business-card.git /opt/o-hive
-git -C /opt/o-hive checkout --quiet fbfa0562a4e5842b991442c90ae28a04601f2051
+git -C /opt/o-hive checkout --quiet 702339ff9e6f2f4b2417ac96fd482a40a7b09def
 mkdir -p /opt/model-cache
 
 echo "O_HIVE_CPU_BENCHMARK_STAGE=runtime"

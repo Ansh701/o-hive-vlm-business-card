@@ -4,13 +4,13 @@ A focused document-intelligence workspace for bulk business-card ingestion. User
 
 ## Assignment status
 
-The implementation and local verification are complete. External services that still require account access are reported as pending, not simulated:
+The application, AWS CPU viability benchmark, and local verification are complete. Remaining public deployments are reported as pending, not simulated:
 
 | Deliverable | Status |
 | --- | --- |
-| Public application URL | **Pending** — no Render account/API credential is available in this environment |
+| Public application URL | **Pending** — Render account access is still required |
 | Public GitHub repository | [github.com/Ansh701/o-hive-vlm-business-card](https://github.com/Ansh701/o-hive-vlm-business-card) |
-| AWS Qwen inference | Deployment path complete; real provisioning/acceptance is **pending AWS credentials and GPU quota** |
+| AWS Qwen inference | CPU viability proven on AWS; production CloudFormation change set/deployment is in progress |
 | Local application/tests | Verified; see [Verification](#verification) |
 
 Expected production URL after deployment: `https://o-hive-vlm-business-card.onrender.com/`.
@@ -40,8 +40,8 @@ flowchart TD
     UI[React + TypeScript]
     API[FastAPI]
     DB[(Render PostgreSQL)]
-    CF[Cloudflare Tunnel<br/>outbound only]
-    AWS[EC2 g4dn.xlarge<br/>Qwen3-VL-2B-Instruct FP16]
+    L[Lambda Function URL<br/>HMAC gate + private proxy]
+    AWS[EC2 m7i.xlarge<br/>Qwen3-VL-2B-Instruct BF16 CPU]
     XLSX[Excel workbook]
 
     U -->|HTTPS| R
@@ -50,13 +50,13 @@ flowchart TD
         UI -->|same-origin /api| API
     end
     API --> DB
-    API -->|HTTPS + HMAC<br/>one sanitized card| CF
-    CF -->|localhost:8001| AWS
+    API -->|HTTPS + HMAC<br/>one sanitized card| L
+    L -->|security-group scoped<br/>private TCP 8001| AWS
     AWS -->|structured JSON text| API
     API --> XLSX
 ```
 
-The browser never receives AWS credentials or the inference secret. The EC2 security group has no inbound rules. `cloudflared` establishes an outbound HTTPS tunnel to the localhost-only model service, avoiding a load balancer, NAT gateway, Elastic IP, and public model port.
+The browser never receives AWS credentials or the inference secret. The EC2 model port accepts only traffic from the Lambda proxy security group; it has no public ingress. A Lambda Function URL supplies managed HTTPS and validates the same signed body before making the private VPC hop. This avoids a load balancer, NAT gateway, Elastic IP, public model port, and third-party tunnel account.
 
 ## Technology stack
 
@@ -66,7 +66,7 @@ The browser never receives AWS credentials or the inference secret. The EC2 secu
 | Application API | Python 3.12+, FastAPI, Pydantic Settings, httpx |
 | Persistence | PostgreSQL, SQLAlchemy 2 async, asyncpg, Alembic |
 | Image safety | Pillow with decode/verify/re-encode and decompression-bomb handling |
-| Model runtime | Qwen3-VL-2B-Instruct, Transformers 5.10+, PyTorch 2.14, CUDA 12.6 |
+| Model runtime | Qwen3-VL-2B-Instruct, Transformers 5.10+, PyTorch 2.14, CPU BF16 |
 | Export | openpyxl |
 | Testing | pytest, Vitest, Testing Library, Playwright Core, Axe |
 | Deployment | One multistage Render Dockerfile; one AWS EC2 model host; CloudFormation |
@@ -111,11 +111,11 @@ Raw image bytes and full model responses are never stored in PostgreSQL.
 
 ### Why no queue, Redis, or microservices
 
-Each upload request processes one card. The React client starts at most two requests concurrently, the Render inference client has a second server-side semaphore, and the AWS model runtime serializes GPU generation. This keeps failures isolated and progress real without Celery, Redis, or another operational subsystem. The trade-off is that an in-flight card request is not durable across a Render restart.
+Each upload request processes one card. The React client starts at most two requests concurrently, the Render inference client has a second server-side semaphore, Lambda reserved concurrency is two, and the AWS model runtime serializes generation. This keeps failures isolated and progress real without Celery, Redis, or another operational subsystem. The trade-off is that an in-flight card request is not durable across a Render restart.
 
-### Why an outbound tunnel
+### Why a Lambda Function URL proxy
 
-A public HTTPS model origin is needed by Render, but an Application Load Balancer would add a fixed hourly charge. A remotely managed Cloudflare Tunnel provides TLS and routes to `127.0.0.1:8001` while EC2 retains zero inbound security-group rules. HMAC still authenticates every inference body; the tunnel is transport, not the authorization boundary.
+Render needs a public HTTPS destination, but an Application Load Balancer has a fixed hourly cost. The small Lambda proxy provides AWS-managed TLS, validates a timestamped HMAC before proxying, and reaches the model only through security-group-scoped private networking. It has a 6,000,000-byte body limit and reserved concurrency of two. `AuthType: NONE` makes the URL reachable from Render; application HMAC is therefore the authorization boundary. Both function-URL permissions required for new URLs since October 2025 are declared explicitly. This is a cost-conscious demo boundary, not a replacement for a private network link in a production system.
 
 ## Qwen model choice
 
@@ -124,12 +124,12 @@ The selected model is [`Qwen/Qwen3-VL-2B-Instruct`](https://huggingface.co/Qwen/
 | Property | Choice |
 | --- | --- |
 | Model | `Qwen/Qwen3-VL-2B-Instruct` |
-| Weight precision | FP16 |
+| Weight precision | BF16 on CPU |
 | Quantization | None; this build does not claim unmeasured 4-bit/8-bit quality |
-| Planned hardware | `g4dn.xlarge`: 4 vCPU, 16 GiB RAM, one 16 GB NVIDIA T4 |
+| Measured hardware | `m7i.xlarge`: 4 vCPU, 16 GiB RAM |
 | Runtime image | Digest-pinned `pytorch/pytorch:2.14.0-cuda12.6-cudnn9-runtime` |
 
-FP16 is deliberate: NVIDIA T4 does not have native BF16 acceleration. Roughly 4 GB is needed for 2B FP16 weights before vision activations, KV cache, framework overhead, and the processor. The 2B model is smaller than the initially considered Qwen2.5-VL-3B and is adequate to test the seven-field extraction task without selecting a 7B+ model by default.
+The runtime image is CUDA-capable but the submitted service deliberately selects CPU; this keeps the same audited dependency set while GPU quota is zero. The measured BF16 process peaked at 5,214.8 MiB RSS. Quantization was not added because the model already fits with adequate one-card latency, and no unmeasured accuracy trade-off is presented as an optimization. The 2B model is smaller than the initially considered Qwen2.5-VL-3B and is sufficient for this seven-field task without defaulting to a 7B+ model.
 
 ## AWS deployment decision
 
@@ -137,33 +137,33 @@ The options were evaluated in the required order:
 
 | Option | Decision | Evidence/trade-off |
 | --- | --- | --- |
-| Free/credit CPU | Rejected for the submitted deployment | Free shapes do not provide enough memory for model + runtime, and CPU latency is not credible for an interactive multi-card demo. A measured AWS CPU benchmark is still pending credentials and is not fabricated. |
-| Small accelerated EC2 | **Selected** | `g4dn.xlarge` is the smallest practical T4 shape: one 16 GB GPU, 16 GiB host RAM. Spot is the cost-first mode; On-Demand is the reliable review-window mode. |
-| SageMaker managed inference | Rejected | [SageMaker Serverless Inference does not support GPUs](https://docs.aws.amazon.com/sagemaker/latest/dg/model-deploy-feature-matrix.html); a persistent real-time GPU endpoint adds more lifecycle complexity without lowering this demo's cost. |
+| Free/credit CPU | **Selected after measurement** | Tiny always-free shapes cannot hold the runtime. A short-lived `m7i.xlarge` run loaded the model in 19.594 s, inferred one synthetic card in 25.617 s, peaked at 5,214.8 MiB RSS, and returned an exact schema-valid seven-field result. The account's general promotional credits can offset standard EC2 charges, but this instance is not described as “free GPU” or an always-free shape. |
+| Small accelerated EC2 | Not required | Both G/VT On-Demand and Spot quotas were zero when checked. Minimum quota requests were submitted, but the proven CPU result removed the need to wait or select a larger accelerator. |
+| SageMaker managed inference | Rejected | A persistent endpoint adds lifecycle/endpoint complexity and did not improve this low-volume CPU demo's measured cost or explainability. |
 
-The AWS model is a real service in `inference/`, not a proxy to another inference provider. The CloudFormation template creates one replaceable GPU instance, an instance profile, and an egress-only security group. It does not create a NAT gateway, load balancer, Elastic IP, RDS database, or S3 retention bucket.
+The AWS model is a real service in `inference/`, not a proxy to another inference provider. CloudFormation creates one replaceable CPU instance, a VPC-connected Lambda HTTPS proxy, narrowly scoped roles, two security groups, and seven-day proxy logs. It does not create a NAT gateway, load balancer, Elastic IP, AWS database, or S3 retention bucket.
 
 ## AWS cost strategy
 
-AWS does not describe GPU instances as universally free tier. New accounts may receive credits under the [current AWS Free Tier program](https://aws.amazon.com/free/free-tier-faqs/), but eligibility is account-specific and must be checked before launch.
+AWS does not describe this EC2 shape as universally free. Under the [current AWS Free Tier program](https://aws.amazon.com/free/free-tier-faqs/), eligible new customers receive credits, but eligibility and balance remain account-specific. On 2026-09-20 this account was an active paid plan with **$100 promotional credit remaining** and no returned free-tier-usage entries; standard pay-as-you-go pricing still applies and credits are not treated as a guarantee.
 
-The current AWS bulk price feed lists Linux `g4dn.xlarge` in us-east-1 at **$0.526/hour**, effective 2026-09-01. The estimate also uses [public IPv4 at $0.005/hour](https://aws.amazon.com/blogs/aws/new-aws-public-ipv4-address-charge-public-ip-insights/) and [gp3 at $0.08/GB-month](https://aws.amazon.com/ebs/pricing/). Calculations are performed by `scripts/calculate_aws_cost.py`, not mental arithmetic:
+The AWS bulk price feed queried on 2026-09-20 lists Linux `m7i.xlarge` in us-east-1 at **$0.2016/hour**. The estimate also uses [public IPv4 at $0.005/hour](https://aws.amazon.com/blogs/aws/new-aws-public-ipv4-address-charge-public-ip-insights/) and [gp3 at $0.08/GB-month](https://aws.amazon.com/ebs/pricing/). Calculations are performed by `scripts/calculate_aws_cost.py`, not mental arithmetic:
 
 | On-Demand lifetime | Estimated total* |
 | --- | ---: |
-| 1 hour | $0.5354 |
-| 8-hour review window | $4.2831 |
-| 24 hours | $12.8492 |
-| 730-hour month | $390.8300 |
+| 1 hour | $0.2110 |
+| 8-hour review window | $1.6879 |
+| 24 hours | $5.0636 |
+| 730-hour month | $154.0180 |
 
-\*Compute + one public IPv4 + prorated 40 GB gp3, excluding tax and data transfer.
+\*Compute + one auto-assigned public IPv4 + prorated 40 GB gp3, excluding tax, data transfer, and the tiny request-based Lambda cost. Promotional credits, if applicable, reduce the bill rather than the list price.
 
 Spot pricing changes by Availability Zone. Query it immediately before deployment instead of copying a stale number:
 
 ```bash
 aws ec2 describe-spot-price-history \
   --region us-east-1 \
-  --instance-types g4dn.xlarge \
+  --instance-types m7i.xlarge \
   --product-descriptions Linux/UNIX \
   --start-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --max-items 6
@@ -171,16 +171,17 @@ aws ec2 describe-spot-price-history \
 
 Cost guardrails:
 
-- Spot by default; On-Demand only for a reliability-critical review window.
+- On-Demand for evaluator reliability; Spot remains an explicit cheaper option with interruption risk.
 - One instance only, 40 GB encrypted gp3, no detailed monitoring.
 - No NAT gateway, load balancer, Elastic IP, or AWS database.
+- Lambda reserved concurrency of two and a request body cap below the 6 MB synchronous limit.
 - Actual 50/80/100% and forecast 100% budget alerts.
 - `MAX_DAILY_CARDS`, per-address/global throttles, upload limits, and concurrency limits.
 - Delete the inference stack after review; stopping leaves EBS charges, while deleting removes the volume.
 
 ## Bulk upload and extraction pipeline
 
-1. React validates extension, browser MIME, 8 MB size, and the 20-card UI limit immediately.
+1. React validates extension, browser MIME, 4 MB size, and the 20-card UI limit immediately.
 2. The browser creates one batch and uploads cards independently with two workers.
 3. FastAPI checks the declared request size and reads at most `MAX_FILE_BYTES + 1`.
 4. Pillow verifies decoded JPEG/PNG/WEBP content, rejects decompression bombs and excessive dimensions, and re-encodes the image to drop metadata/trailing payloads.
@@ -198,7 +199,7 @@ Missing values remain `null`. The prompt explicitly forbids inferring a surname,
 - International phone numbers beginning with `+` are normalized to E.164 when reliably parseable.
 - National-looking phone numbers preserve source formatting and receive a country-ambiguity warning.
 - Names are requested as `first_name` and `last_name`; there is no “first token/last token” parser.
-- Low-confidence fields create review warnings.
+- Ambiguous or invalid-looking email/phone values create review warnings; missing text remains null rather than being invented.
 
 ## Partial failure behavior
 
@@ -229,9 +230,10 @@ Structured batches and leads remain until records are removed, the database is m
 - CSP, HSTS in production, frame denial, `nosniff`, referrer, and permissions headers.
 - Production debug/OpenAPI UI disabled; safe JSON errors do not expose stack traces.
 - Short-lived HMAC-SHA256 requests with a five-minute replay window.
-- Secrets come from Render secret environment values and EC2 SSM SecureString files.
-- EC2 IMDSv2, encrypted/delete-on-termination disk, no SSH key, no inbound rules.
-- EC2 IAM role can read only the two named bootstrap parameters plus Session Manager permissions.
+- Secrets come from a Render secret environment value, one SSM SecureString fetched by the EC2 role, and the Lambda environment resolved from that SecureString at deployment.
+- EC2 IMDSv2, encrypted/delete-on-termination disk, no SSH key, and only security-group-sourced model ingress.
+- The EC2 role can read only the named bootstrap parameter plus Session Manager permissions. The Lambda role has only ENI lifecycle and scoped log-write actions.
+- Lambda enforces path/method, body size, five-minute timestamp freshness, constant-time HMAC comparison, a 70-second upstream timeout, and reserved concurrency of two.
 - Privacy-safe JSON logs: IDs, durations, result/error categories, and 12-character hashes; no images, filenames, contact data, model bodies, or secrets.
 - Formula-injection defense in Excel.
 - Weekly Dependabot coverage and CI dependency audits.
@@ -294,10 +296,12 @@ Start from `.env.example`; never commit `.env`.
 | `AWS_INFERENCE_ENDPOINT` | Full HTTPS URL ending in `/v1/extract` |
 | `AWS_INFERENCE_SHARED_SECRET` | Long random HMAC secret; server-side only |
 | `QWEN_MODEL` | `Qwen/Qwen3-VL-2B-Instruct` |
-| `MODEL_DTYPE` | `float16` on T4 |
-| `MAX_REQUEST_BYTES` | 13 MiB at the AWS inference service |
+| `MODEL_DEVICE` | `cpu` on the measured deployment |
+| `MODEL_DTYPE` | `bfloat16` on the measured CPU host |
+| `TORCH_NUM_THREADS` | 4 on `m7i.xlarge` |
+| `MAX_REQUEST_BYTES` | 6,000,000 bytes, below Lambda's 6 MB synchronous payload ceiling |
 | `MAX_CARDS_PER_BATCH` | 20 |
-| `MAX_FILE_BYTES` | 8 MiB |
+| `MAX_FILE_BYTES` | 4 MiB |
 | `MAX_TOTAL_BYTES` | 64 MiB |
 | `MAX_IMAGE_PIXELS` | 24,000,000 |
 | `MAX_DAILY_CARDS` | 100 in `render.yaml` |
@@ -324,78 +328,95 @@ The container runs `alembic upgrade head` before Uvicorn. Do not edit production
 Prerequisites:
 
 - Authenticated AWS CLI with EC2, CloudFormation, IAM, SSM, and Budgets permissions.
-- `g4dn.xlarge` quota/capacity in the chosen region.
-- A Cloudflare account/domain and one remotely managed tunnel.
-- A public immutable inference image in GHCR.
+- Standard EC2 quota/capacity for one `m7i.xlarge` in us-east-1.
+- A default or equivalent VPC public subnet whose route table reaches an internet gateway.
+- The reviewed source commit pushed to the public repository.
 
-### 1. Publish the model image
+### 1. Confirm cost and network inputs
 
-Push the repository, create an `inference-v*` tag, and run `.github/workflows/publish-inference.yml`. Make the resulting GHCR package public, then use the immutable `sha-...` tag for `InferenceImageUri`.
-
-### 2. Create the tunnel
-
-In Cloudflare Zero Trust, create a remotely managed tunnel. Add a public hostname such as `qwen.example.com` with service `http://localhost:8001`. Copy the tunnel token once; do not commit it.
-
-### 3. Store bootstrap secrets
+Check account credits, standard EC2 quota, current price, VPC, and subnet before provisioning. A public subnet is needed only so the instance can download packages/model weights; its security group still has no public ingress. The VPC-connected Lambda does not need internet access because it calls only the instance's private IP.
 
 ```bash
+aws account get-account-information --region us-east-1
+aws service-quotas get-service-quota --region us-east-1 \
+  --service-code ec2 --quota-code L-1216C47A
+aws ec2 describe-vpcs --region us-east-1 --filters Name=is-default,Values=true
+aws ec2 describe-subnets --region us-east-1 \
+  --filters Name=vpc-id,Values="$VPC_ID" Name=map-public-ip-on-launch,Values=true
+```
+
+### 2. Store one shared HMAC secret
+
+Generate it in a private shell, store it in SSM, and retain it only long enough to enter it as Render's secret value. Never commit or print it:
+
+```bash
+INFERENCE_SHARED_SECRET="$(openssl rand -hex 32)"
 aws ssm put-parameter --region us-east-1 \
   --name /o-hive/inference/hmac-secret --type SecureString \
   --value "$INFERENCE_SHARED_SECRET" --overwrite
-
-aws ssm put-parameter --region us-east-1 \
-  --name /o-hive/inference/cloudflare-tunnel-token --type SecureString \
-  --value "$CLOUDFLARE_TUNNEL_TOKEN" --overwrite
 ```
 
-### 4. Resolve the current AWS DLAMI
+### 3. Resolve the current AL2023 image and immutable source revision
 
-Use AWS's public SSM parameter instead of hard-coding an AMI:
+Use AWS's public SSM parameter instead of hard-coding an AMI. The service checks out the exact pushed commit and builds the digest-pinned inference image on the host:
 
 ```bash
 AMI_ID=$(aws ssm get-parameter --region us-east-1 \
-  --name /aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-24.04/latest/ami-id \
+  --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
   --query Parameter.Value --output text)
+SOURCE_REVISION=$(git rev-parse HEAD)
 ```
 
-The current [AWS Deep Learning Base GPU AMI documentation](https://docs.aws.amazon.com/dlami/latest/devguide/aws-deep-learning-x86-base-gpu-ami-ubuntu-24-04.html) lists G4dn support, Docker/NVIDIA tooling, and Session Manager.
-
-### 5. Deploy the budget and inference stack
+### 4. Validate and deploy through a reviewed change set
 
 ```bash
-aws cloudformation deploy --region us-east-1 \
-  --stack-name o-hive-budget \
-  --template-file infra/aws/budget.yaml \
-  --parameter-overrides AlertEmail=you@example.com MonthlyBudgetUsd=25
+cfn-lint infra/aws/inference-ec2.yaml infra/aws/budget.yaml
+cfn-guard validate --rules infra/aws/guard.rules \
+  --data infra/aws/inference-ec2.yaml infra/aws/budget.yaml
 
-aws cloudformation deploy --region us-east-1 \
-  --stack-name o-hive-qwen \
-  --template-file infra/aws/inference-ec2.yaml \
-  --capabilities CAPABILITY_IAM \
-  --parameter-overrides \
-    VpcId="$VPC_ID" PublicSubnetId="$PUBLIC_SUBNET_ID" AmiId="$AMI_ID" \
-    CapacityMode=Spot InstanceType=g4dn.xlarge \
-    InferenceImageUri="ghcr.io/<owner>/o-hive-vlm-business-card-inference:sha-<commit>" \
-    InferenceHostname=qwen.example.com
+aws cloudformation create-change-set --region us-east-1 \
+  --stack-name o-hive-qwen --change-set-name reviewed-deploy \
+  --change-set-type CREATE --capabilities CAPABILITY_IAM \
+  --template-body file://infra/aws/inference-ec2.yaml \
+  --parameters \
+    ParameterKey=VpcId,ParameterValue="$VPC_ID" \
+    ParameterKey=PublicSubnetId,ParameterValue="$PUBLIC_SUBNET_ID" \
+    ParameterKey=VpcDnsResolverCidr,ParameterValue="$VPC_DNS_RESOLVER_CIDR" \
+    ParameterKey=AmiId,ParameterValue="$AMI_ID" \
+    ParameterKey=CapacityMode,ParameterValue=OnDemand \
+    ParameterKey=SourceRevision,ParameterValue="$SOURCE_REVISION"
+
+aws cloudformation wait change-set-create-complete --region us-east-1 \
+  --stack-name o-hive-qwen --change-set-name reviewed-deploy
+aws cloudformation describe-change-set --region us-east-1 \
+  --stack-name o-hive-qwen --change-set-name reviewed-deploy
+# Review the resource changes before the next command.
+aws cloudformation execute-change-set --region us-east-1 \
+  --stack-name o-hive-qwen --change-set-name reviewed-deploy
+aws cloudformation wait stack-create-complete --region us-east-1 \
+  --stack-name o-hive-qwen
 ```
 
-Confirm the AWS Budget email. If Spot capacity or interruptions are unacceptable during evaluation, redeploy with `CapacityMode=OnDemand`. Never assume the account has GPU quota or credits—verify first.
+Create the monitoring budget separately with `infra/aws/budget.yaml`, an address you control, and a threshold appropriate for the whole account. Confirm its subscription email. Budgets are delayed monitoring, not an automatic shutdown control.
 
-### 6. Verify real AWS inference
+### 5. Verify real AWS inference
 
 ```bash
-export AWS_INFERENCE_ENDPOINT=https://qwen.example.com/v1/extract
+export AWS_INFERENCE_ENDPOINT="$(aws cloudformation describe-stacks \
+  --region us-east-1 --stack-name o-hive-qwen \
+  --query 'Stacks[0].Outputs[?OutputKey==`InferenceEndpoint`].OutputValue' --output text)"
 export AWS_INFERENCE_SHARED_SECRET='<matching-secret>'
 python scripts/smoke_inference.py
 ```
 
-Expected behavior: one synthetic card returns a schema-valid lead and a measured `latency_seconds`. Record that output without the secret. This acceptance was not run in the current environment because AWS credentials are unavailable.
+Expected behavior: one synthetic card returns a schema-valid lead and measured `latency_seconds`. The proxy returns 401 for missing/bad signatures, 413 above its body limit, and 502 until the private model service is healthy. Diagnose the host through Session Manager; no SSH port or key is created.
 
-### 7. Teardown
+### 6. Teardown
 
 ```bash
 aws cloudformation delete-stack --region us-east-1 --stack-name o-hive-qwen
 aws cloudformation wait stack-delete-complete --region us-east-1 --stack-name o-hive-qwen
+aws ssm delete-parameter --region us-east-1 --name /o-hive/inference/hmac-secret
 ```
 
 Delete the stack—not merely stop the instance—when the review window ends. Keep the monitoring budget if desired.
@@ -417,7 +438,7 @@ Current Render limitations matter: [free web services spin down after 15 minutes
 # Backend
 python -m pytest -q
 python -m ruff check backend inference scripts
-python -m mypy backend/app scripts inference
+python -m mypy backend inference scripts
 python -m pip_audit . --progress-spinner off
 python -m pip_audit -r inference/requirements.txt --progress-spinner off
 
@@ -454,57 +475,60 @@ Tests never call a paid model. Mocked responses cover valid output, malformed JS
 
 There are 9 cards × 7 fields = 63 scored field outcomes. `scripts/evaluate_extraction.py` classifies each as correct, partial, or failed. No real person's card is committed.
 
-Real-model score: **pending AWS deployment**. The scorer and fixtures are tested, but this README does not convert mocked output into an accuracy claim.
+The controlled horizontal Mina Patel card was also used for the AWS CPU viability run: all seven expected fields matched and the output passed the strict schema. The complete 63-field suite remains pending the long-lived endpoint; one successful card is not represented as a 100% dataset score.
 
 ## Performance measurements
 
 | Measurement | Result |
 | --- | --- |
-| AWS model cold start | Pending real deployment |
-| Single-card Qwen latency | Pending `scripts/smoke_inference.py` |
+| Model load on fresh AWS benchmark host | 19.594 s |
+| Single-card Qwen generation | 25.617 s |
+| Peak process RSS | 5,214.8 MiB |
 | Five-card public batch | Pending `scripts/benchmark_batch.py` |
-| Hardware target | g4dn.xlarge / NVIDIA T4 16 GB |
-| Precision target | FP16, no 4/8-bit quantization |
+| Actual benchmark hardware | m7i.xlarge / 4 vCPU / 16 GiB |
+| Actual precision | BF16 CPU, no 4/8-bit quantization |
 
-These are intentionally blank until measured on the actual AWS host. Local mocked test duration is not model performance.
+The measured run used the exact prompt and `Qwen/Qwen3-VL-2B-Instruct` code from commit `702339ff9e6f2f4b2417ac96fd482a40a7b09def`. It returned the seven expected Mina Patel fields with no extra keys. The benchmark instance and its temporary role, profile, security group, and SSM result parameter were removed after measurement. Container boot/download time and the five-card public path will be recorded separately after production deployment; mocked test duration is never presented as model performance.
 
 ## Verification
 
-Verified locally on 2026-09-19:
+Verified on 2026-09-20:
 
-- Backend: 86 pytest tests, Ruff clean, strict mypy clean.
+- Backend: 90 pytest tests, Ruff clean, strict mypy clean across backend, inference, and scripts.
 - Frontend: 13 Vitest tests, ESLint clean, TypeScript clean, Vite production build successful.
 - Responsive/A11y: 15 automated viewport/state/theme combinations; widths 320, 375, 390, 430, 768, 1024, 1280, 1440, and 1920; no horizontal overflow or serious/critical Axe findings.
-- CloudFormation: `cfn-lint` and CloudFormation Guard 3.2.1 pass both templates.
+- CloudFormation: `cfn-lint`, CloudFormation Guard 3.2.1, and the AWS `validate-template` API pass.
+- Migration: `alembic upgrade head` succeeds from a clean SQLite development database and creates only `alembic_version`, `batches`, and `leads`; production PostgreSQL verification remains part of Render acceptance.
+- AWS: real Qwen CPU benchmark passed strict seven-field extraction; production endpoint deployment/acceptance remains in progress.
 - Python dependency audits: application and inference requirement sets report no known vulnerabilities. The model base was upgraded from vulnerable Torch 2.6/Transformers 4.57 to Torch 2.14/Transformers 5.10+.
-- Frontend install audit reported zero vulnerabilities; if the standalone npm advisory endpoint is under maintenance, rerun `npm audit` before deployment.
+- Frontend `npm ci` reported zero vulnerabilities.
 - Docker build: not run here because Docker is not installed on this machine.
-- Clean PostgreSQL migration, real AWS inference, public Render E2E, and production URLs: pending the credentials/tools named in Assignment status.
+- Docker build on the AWS host, clean production PostgreSQL migration, public Render E2E, and production URL remain pending their deployment stages.
 
 ## Known limitations
 
 - Blurry, cropped, reflective, stylized, handwritten, and low-contrast cards may reduce extraction quality.
 - Names remain culturally ambiguous; uncertain splits should be left blank and reviewed.
 - National phone formats do not receive a guessed country.
-- T4 model cold start and free Render cold start can both add latency.
-- Spot instances can be interrupted and this one-instance template does not automatically replace a terminated Spot request.
+- CPU inference is deliberately cost-oriented; multi-card batches are much slower than a GPU service, and both model bootstrap and free Render cold start add latency.
+- Spot mode can be interrupted and this one-instance template does not automatically replace a terminated Spot request; the submitted review configuration uses On-Demand.
+- The Lambda Function URL is public at the transport layer and relies on application HMAC, size limits, and concurrency limits; use private connectivity/IAM-based invocation for a higher-assurance production system.
 - Card processing is request-bound, not a durable background queue; a Render restart can interrupt an in-flight card.
 - The in-memory rate limiter assumes the one-instance Render architecture. Multi-instance deployment needs shared enforcement.
 - The database daily cap can be exceeded by a small number of simultaneous race-in requests; AWS Budgets and the global limiter remain independent backstops.
 - No application login: possession of a batch UUID grants access to that batch.
 - Structured data has no automatic TTL or batch-delete endpoint.
 - Free Render PostgreSQL expires after 30 days and has no backups.
-- The Cloudflare tunnel introduces one external transport dependency, though Qwen inference still executes on AWS.
 
 ## Future improvements
 
-- Measure FP16 accuracy/latency, then evaluate 8-bit only if memory or throughput data justifies it.
+- Run the complete nine-card/63-field real-model evaluation, then evaluate 8-bit only if memory or throughput data justifies its accuracy trade-off.
 - Add authenticated workspaces and a batch-delete/retention control.
 - Add a small persisted job lease if production request interruption becomes a real issue.
 - Use a transactional usage-reservation row for a hard multi-request daily cap.
 - Add direct card/lead linking for richer source-side review without retaining raw images.
 - Add scheduled TTL cleanup for structured demo data.
-- Pin the Cloudflare image by digest after deployment validation.
+- Replace build-on-boot with a signed immutable ECR image after CI/package billing is restored.
 - Add a second Availability Zone/worker only if reliability requirements justify the cost.
 
 ## AI Usage
@@ -517,19 +541,20 @@ Significant AI-assisted recommendations adopted after review:
 - Independent per-card processing with bounded concurrency and partial-success semantics.
 - Strict Pydantic model output, conservative normalization, and one repair/retry boundary.
 - Decode/re-encode upload validation, duplicate hashing, formula-injection defense, HMAC model authentication, and privacy-safe structured logs.
-- A small Qwen3-VL-2B FP16 model on the smallest practical T4 EC2 shape.
-- An outbound-only Cloudflare Tunnel to avoid public EC2 ingress and an AWS load balancer.
+- A small Qwen3-VL-2B model running BF16 on the measured 4-vCPU/16-GiB AWS host.
+- A bounded HMAC-validating Lambda URL proxy and security-group-only private model hop to avoid public model ingress and a fixed-cost AWS load balancer/NAT gateway.
 - Synthetic fictional test cards, deterministic cost calculations, CloudFormation Guard rules, and responsive/Axe browser checks.
 
 Recommendations rejected or modified:
 
 - Rejected microservices, Kubernetes, Celery/Redis, LangChain, a vector database, RAG, and permanent image storage as unnecessary for this assignment.
 - Rejected separate frontend/backend hosting in favor of one Render service.
-- Rejected SageMaker merely for being “managed”; serverless lacks GPU support and a real-time endpoint did not improve this small workload's economics.
+- Rejected SageMaker merely for being “managed”; a persistent endpoint did not improve this small workload's economics or explainability.
 - Modified the initial Qwen2.5-VL-3B idea to the smaller current Qwen3-VL-2B model.
-- Modified an initial BF16 runtime suggestion to FP16 after checking T4 hardware support.
+- Modified the initial GPU plan after measured AWS CPU inference proved viable and G/VT quotas were zero.
+- Rejected a Cloudflare tunnel after finding that a small AWS Lambda proxy could provide TLS without another account/domain while preserving private EC2 ingress.
 - Rejected stale Torch 2.6/Transformers 4.57 dependencies after advisory scanning; upgraded to a current digest-pinned runtime.
-- Rejected invented AWS benchmark, accuracy, deployment, and npm-audit claims when credentials or an external service were unavailable.
+- Rejected invented full-suite accuracy, production deployment, and five-card latency claims; only completed measurements are reported.
 
 The candidate reviewed the generated recommendations, ran the verification described above, can explain the code and trade-offs, and remains responsible for the submission.
 

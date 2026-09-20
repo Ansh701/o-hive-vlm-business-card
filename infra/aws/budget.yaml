@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Account-level AWS cost guardrail for the O-HIVE demo — monitoring-only actual and
+  Account-level AWS cost guardrail for the O-HIVE demo - monitoring-only actual and
   forecast email alerts avoid automated shutdown surprises
 
 Metadata:
@@ -10,7 +10,7 @@ Metadata:
     arch: one monitoring-only monthly account budget; separate thresholds share one email
     must:
       - deploy in us-east-1 because AWS Budgets is a global billing API
-      - alerts are delayed and do not replace stopping the GPU after the review window
+      - alerts are delayed and do not replace stopping the model host after the review window
     ref:
       - at: README.md
         has: cost estimates and manual stop/delete procedure
@@ -33,7 +33,7 @@ Resources:
     Type: AWS::Budgets::Budget
     Metadata:
       com.aws.cloudformation.Context:
-        why: account-wide monitoring catches GPU, disk, public IPv4, and accidental unrelated spend
+        why: account-wide monitoring catches compute, disk, public IPv4, and accidental unrelated spend
         must:
           - monitoring only; no automated action can terminate a live evaluator session
           - keep actual 50/80/100 and forecast 100 percent alerts

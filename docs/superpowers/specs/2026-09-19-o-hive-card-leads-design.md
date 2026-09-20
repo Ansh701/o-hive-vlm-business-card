@@ -12,7 +12,7 @@ The browser first creates a batch, then sends one multipart card request per ima
 
 The FastAPI process uses SQLAlchemy 2 async sessions and PostgreSQL in production. SQLite through `aiosqlite` is supported for deterministic local tests only. Alembic owns schema changes. A single multi-stage Dockerfile builds Vite and serves the generated assets from FastAPI.
 
-AWS runs `Qwen/Qwen3-VL-2B-Instruct` at FP16 on a single NVIDIA T4 `g4dn.xlarge`. FP16 is selected because T4 does not provide native BF16 acceleration; this is not 4-bit/8-bit quantization. This replaces the initial Qwen2.5-VL-3B candidate because the current 2B model is smaller, Apache-2.0 licensed, officially supported by Transformers, and its model card reports improved OCR. CPU-only free-tier shapes are rejected: the smallest free shapes cannot hold the model, and larger credit-eligible CPU shapes do not provide acceptable interactive latency. SageMaker Serverless is rejected because it does not support GPUs. A Spot instance is the lowest-cost deployment when interruption risk is acceptable; on-demand is the reliable fallback. The instance must be stopped when the review window is closed.
+AWS runs `Qwen/Qwen3-VL-2B-Instruct` at BF16 on one `m7i.xlarge` CPU instance. This is not 4-bit/8-bit quantization. A short-lived AWS benchmark measured 19.594 seconds to load, 25.617 seconds for one controlled card, and 5,214.8 MiB peak RSS, with all seven expected fields schema-valid. This replaces the initial Qwen2.5-VL-3B candidate because the current 2B model is smaller, Apache-2.0 licensed, officially supported by Transformers, and adequate for the constrained extraction task. Tiny free shapes cannot hold the runtime; the measured CPU shape is standard paid EC2 whose cost can be offset by account-specific credits. GPU was not required after the CPU result, and the account's G/VT quotas were zero. On-Demand is used for evaluator reliability; Spot remains an explicit interruption-prone option. The stack must be deleted after the review window.
 
 ## Components and boundaries
 
@@ -24,7 +24,7 @@ AWS runs `Qwen/Qwen3-VL-2B-Instruct` at FP16 on a single NVIDIA T4 `g4dn.xlarge`
 - `backend/app/api.py`: typed HTTP contracts and status mapping.
 - `frontend/src/*`: local file validation/previews, real XMLHttpRequest upload progress, bounded processing, review editing, selection, export, and themes.
 - `inference/*`: AWS-only Qwen runtime with matching HMAC validation and structured extraction contract.
-- `infra/aws/*`: one-instance deployment, least-privilege role, minimal storage/logging, no NAT gateway/load balancer/Elastic IP by default, and optional cost budget.
+- `infra/aws/*`: one-instance deployment, HMAC-validating Lambda URL proxy, security-group-only private model ingress, least-privilege roles, minimal storage/logging, no NAT gateway/load balancer/Elastic IP, and optional cost budget.
 
 ## Data model
 
