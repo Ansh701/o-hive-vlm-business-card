@@ -6,6 +6,7 @@ from typing import Any
 
 from PIL import Image
 
+import scripts.evaluate_extraction as evaluation
 from scripts.evaluate_extraction import OFFICIAL_FIELDS, score_dataset
 from scripts.generate_synthetic_cards import VARIANTS, generate_cards
 
@@ -100,3 +101,11 @@ def test_field_scorer_reports_correct_partial_and_failed_without_raw_values() ->
     serialized = json.dumps(report)
     assert "unexpected_model_text" not in serialized
     assert "Difference Work" not in serialized
+
+
+def test_evaluation_report_creates_its_parent_directory(tmp_path: Path) -> None:
+    report_path = tmp_path / "nested" / "evaluation.json"
+
+    evaluation.write_report(report_path, {"cards_tested": 9})
+
+    assert json.loads(report_path.read_text(encoding="utf-8")) == {"cards_tested": 9}

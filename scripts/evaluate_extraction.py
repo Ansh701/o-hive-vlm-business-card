@@ -60,6 +60,11 @@ def score_dataset(
     }
 
 
+def write_report(path: Path, report: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+
 async def run_evaluation(base_url: str, manifest_path: Path) -> dict[str, Any]:
     manifest_text = await asyncio.to_thread(manifest_path.read_text, encoding="utf-8")
     records = json.loads(manifest_text)
@@ -106,7 +111,7 @@ def main() -> None:
     report = asyncio.run(run_evaluation(arguments.base_url, arguments.manifest))
     serialized = json.dumps(report, indent=2) + "\n"
     if arguments.report:
-        arguments.report.write_text(serialized, encoding="utf-8")
+        write_report(arguments.report, report)
     print(serialized, end="")
 
 

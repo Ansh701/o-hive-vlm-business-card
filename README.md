@@ -4,13 +4,13 @@ A focused document-intelligence workspace for bulk business-card ingestion. User
 
 ## Assignment status
 
-The application, AWS CPU viability benchmark, and local verification are complete. Remaining public deployments are reported as pending, not simulated:
+The application, AWS Qwen service, model acceptance, and local verification are complete. The remaining Render deployment is reported as pending, not simulated:
 
 | Deliverable | Status |
 | --- | --- |
 | Public application URL | **Pending** — Render account access is still required |
 | Public GitHub repository | [github.com/Ansh701/o-hive-vlm-business-card](https://github.com/Ansh701/o-hive-vlm-business-card) |
-| AWS Qwen inference | CPU viability proven on AWS; production CloudFormation change set/deployment is in progress |
+| AWS Qwen inference | **Deployed and verified** — signed synthetic-card request returned all seven expected fields through Lambda to private EC2 |
 | Local application/tests | Verified; see [Verification](#verification) |
 
 Expected production URL after deployment: `https://o-hive-vlm-business-card.onrender.com/`.
@@ -476,7 +476,7 @@ Tests never call a paid model. Mocked responses cover valid output, malformed JS
 
 There are 9 cards × 7 fields = 63 scored field outcomes. `scripts/evaluate_extraction.py` classifies each as correct, partial, or failed. No real person's card is committed.
 
-The controlled horizontal Mina Patel card was also used for the AWS CPU viability run: all seven expected fields matched and the output passed the strict schema. The complete 63-field suite remains pending the long-lived endpoint; one successful card is not represented as a 100% dataset score.
+The complete deployed-AWS evaluation produced **53 exact, 10 partial, and 0 failed fields across 9 cards / 63 fields (84.1% exact)**. Eight partials are phone strings that were correctly read and then normalized from display formatting to E.164; the other two are the culturally ambiguous `María José Carreño Quiñones` first/last split. All explicitly missing email/location fields remained null. This is reported as measured behavior—not “100% accurate.”
 
 ## Performance measurements
 
@@ -485,26 +485,27 @@ The controlled horizontal Mina Patel card was also used for the AWS CPU viabilit
 | Model load on fresh AWS benchmark host | 19.594 s |
 | Single-card Qwen generation | 25.617 s |
 | Peak process RSS | 5,214.8 MiB |
-| Five-card public batch | Pending `scripts/benchmark_batch.py` |
+| Signed production-path card | 27.458 s |
+| Five-card batch, concurrency 2 | 131.669 s; 5/5 successful |
 | Actual benchmark hardware | m7i.xlarge / 4 vCPU / 16 GiB |
 | Actual precision | BF16 CPU, no 4/8-bit quantization |
 
-The measured run used the exact prompt and `Qwen/Qwen3-VL-2B-Instruct` code from commit `702339ff9e6f2f4b2417ac96fd482a40a7b09def`. It returned the seven expected Mina Patel fields with no extra keys. The benchmark instance and its temporary role, profile, security group, and SSM result parameter were removed after measurement. Container boot/download time and the five-card public path will be recorded separately after production deployment; mocked test duration is never presented as model performance.
+The initial host benchmark used the exact prompt and `Qwen/Qwen3-VL-2B-Instruct` code from commit `702339ff9e6f2f4b2417ac96fd482a40a7b09def`. Production acceptance then exercised the HMAC-authenticated Lambda Function URL, one-AZ SSM endpoint, security-group-only private EC2 hop, and running model container. The temporary benchmark resources were removed; the production CloudFormation stack remains active for review. Mocked test duration is never presented as model performance.
 
 ## Verification
 
 Verified on 2026-09-20:
 
-- Backend: 90 pytest tests, Ruff clean, strict mypy clean across backend, inference, and scripts.
+- Backend: 91 pytest tests, Ruff clean, strict mypy clean across backend, inference, and scripts.
 - Frontend: 13 Vitest tests, ESLint clean, TypeScript clean, Vite production build successful.
 - Responsive/A11y: 15 automated viewport/state/theme combinations; widths 320, 375, 390, 430, 768, 1024, 1280, 1440, and 1920; no horizontal overflow or serious/critical Axe findings.
 - CloudFormation: `cfn-lint`, CloudFormation Guard 3.2.1, and the AWS `validate-template` API pass.
 - Migration: `alembic upgrade head` succeeds from a clean SQLite development database and creates only `alembic_version`, `batches`, and `leads`; production PostgreSQL verification remains part of Render acceptance.
-- AWS: real Qwen CPU benchmark passed strict seven-field extraction; production endpoint deployment/acceptance remains in progress.
+- AWS: both stacks are active; the $25 monthly budget has four alert thresholds, the Qwen endpoint passed real signed inference, and the nine-card/63-field evaluation completed.
 - Python dependency audits: application and inference requirement sets report no known vulnerabilities. The model base was upgraded from vulnerable Torch 2.6/Transformers 4.57 to Torch 2.14/Transformers 5.10+.
 - Frontend `npm ci` reported zero vulnerabilities.
-- Docker build: not run here because Docker is not installed on this machine.
-- Docker build on the AWS host, clean production PostgreSQL migration, public Render E2E, and production URL remain pending their deployment stages.
+- Docker: the inference image built successfully on the production AWS host and its container reports healthy. The combined Render application image remains pending the Render build because Docker is not installed locally.
+- Clean production PostgreSQL migration, public Render E2E, and production URL remain pending the Render deployment stage.
 
 ## Known limitations
 
@@ -555,7 +556,7 @@ Recommendations rejected or modified:
 - Modified the initial GPU plan after measured AWS CPU inference proved viable and G/VT quotas were zero.
 - Rejected a Cloudflare tunnel after finding that a small AWS Lambda proxy could provide TLS without another account/domain while preserving private EC2 ingress.
 - Rejected stale Torch 2.6/Transformers 4.57 dependencies after advisory scanning; upgraded to a current digest-pinned runtime.
-- Rejected invented full-suite accuracy, production deployment, and five-card latency claims; only completed measurements are reported.
+- Rejected invented measurements; full-suite accuracy, production inference, and five-card latency are reported only after their real runs completed.
 - Removed the initially added GitHub Actions/Dependabot automation at the repository owner's request; verification remains explicit and locally reproducible rather than CI/CD-driven.
 
 The candidate reviewed the generated recommendations, ran the verification described above, can explain the code and trade-offs, and remains responsible for the submission.
