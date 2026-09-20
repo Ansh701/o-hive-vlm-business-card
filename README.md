@@ -231,7 +231,7 @@ Structured batches and leads remain until records are removed, the database is m
 - CSP, HSTS in production, frame denial, `nosniff`, referrer, and permissions headers.
 - Production debug/OpenAPI UI disabled; safe JSON errors do not expose stack traces.
 - Short-lived HMAC-SHA256 requests with a five-minute replay window.
-- Secrets come from a Render secret environment value and one SSM SecureString fetched by both runtime roles; Lambda reaches SSM only through a one-AZ endpoint with role, endpoint-policy, and security-group restrictions.
+- Secrets come from a Render secret environment value and one SSM SecureString fetched by both runtime roles; the one-AZ endpoint policy exposes only that parameter plus the host's bounded managed-instance actions, and both network paths are security-group scoped.
 - EC2 IMDSv2, encrypted/delete-on-termination disk, no SSH key, and only security-group-sourced model ingress.
 - The EC2 role can read only the named bootstrap parameter plus Session Manager permissions. The Lambda role has only ENI lifecycle and scoped log-write actions.
 - Lambda enforces path/method, body size, five-minute timestamp freshness, constant-time HMAC comparison, a 70-second upstream timeout, and reserved concurrency of two.

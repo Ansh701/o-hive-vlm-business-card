@@ -181,6 +181,26 @@ Resources:
       SourceSecurityGroupId: !GetAtt ProxySecurityGroup.GroupId
       Description: Lambda secret lookup only
 
+  InferenceToParameterStoreEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt InferenceSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationSecurityGroupId: !GetAtt ParameterStoreEndpointSecurityGroup.GroupId
+      Description: Model host secret and SSM agent access through PrivateLink
+
+  InferenceToParameterStoreIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt ParameterStoreEndpointSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !GetAtt InferenceSecurityGroup.GroupId
+      Description: Model host SSM access only
+
   InferenceRole:
     Type: AWS::IAM::Role
     Metadata:
@@ -295,9 +315,13 @@ Resources:
             aws ssm get-parameter --name '${InferenceSecretParameterName}' --with-decryption --query Parameter.Value --output text > /run/o-hive/inference-secret
             chown 10001:10001 /run/o-hive/inference-secret
             chmod 0400 /run/o-hive/inference-secret
-            git clone --quiet '${SourceRepository}' /opt/o-hive/source
+            if [ ! -d /opt/o-hive/source/.git ]; then
+              git clone --quiet '${SourceRepository}' /opt/o-hive/source
+            fi
+            git -C /opt/o-hive/source fetch --quiet origin
             git -C /opt/o-hive/source checkout --quiet '${SourceRevision}'
             docker build --pull --tag 'o-hive-inference:${SourceRevision}' --file /opt/o-hive/source/inference/Dockerfile /opt/o-hive/source
+            docker rm --force o-hive-inference >/dev/null 2>&1 || true
             docker run --detach --name o-hive-inference --restart unless-stopped \
               --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
               --publish 8001:8001 \
@@ -314,6 +338,7 @@ Resources:
 
   InferenceInstance:
     Type: AWS::EC2::Instance
+    DependsOn: ParameterStoreEndpoint
     Metadata:
       com.aws.cloudformation.Context:
         why: one replaceable CPU worker created from the reviewed launch template
@@ -375,6 +400,8 @@ Resources:
   ParameterStoreEndpoint:
     Type: AWS::EC2::VPCEndpoint
     DependsOn:
+      - InferenceToParameterStoreEgress
+      - InferenceToParameterStoreIngress
       - ProxyToParameterStoreEgress
       - ProxyToParameterStoreIngress
     Metadata:
@@ -382,7 +409,7 @@ Resources:
         why: lets the VPC Lambda retrieve its SecureString without a NAT gateway or public route
         must:
           - one subnet/ENI only to bound hourly PrivateLink cost
-          - endpoint policy remains restricted to the proxy role and one parameter
+          - endpoint policy allows the one secret plus the host's bounded managed-instance actions
         mutable: change-with-constraints
     Properties:
       VpcEndpointType: Interface
@@ -394,13 +421,34 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Sid: ReadOnlyNamedInferenceSecret
+          - Sid: RuntimeRolesReadOnlyNamedInferenceSecret
             Effect: Allow
             Principal:
-              AWS: !GetAtt InferenceProxyRole.Arn
+              AWS:
+                - !GetAtt InferenceProxyRole.Arn
+                - !GetAtt InferenceRole.Arn
             Action: ssm:GetParameter
             Resource: !Sub >-
               arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${InferenceSecretParameterName}
+          - Sid: InferenceHostManagedInstanceTraffic
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt InferenceRole.Arn
+            Action:
+              - ssm:DescribeAssociation
+              - ssm:DescribeDocument
+              - ssm:GetDeployablePatchSnapshotForInstance
+              - ssm:GetDocument
+              - ssm:GetManifest
+              - ssm:ListAssociations
+              - ssm:ListInstanceAssociations
+              - ssm:PutComplianceItems
+              - ssm:PutConfigurePackageResult
+              - ssm:PutInventory
+              - ssm:UpdateAssociationStatus
+              - ssm:UpdateInstanceAssociationStatus
+              - ssm:UpdateInstanceInformation
+            Resource: '*'
 
   InferenceProxyLogGroup:
     Type: AWS::Logs::LogGroup
